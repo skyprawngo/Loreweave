@@ -17,6 +17,22 @@
 - 조건부 렌더링(`if isExpanded`)으로 lazy 로딩 구현
 - `@State`, `@Bindable` 등 적절한 프로퍼티 래퍼 선택
 
+### AppKit 사용 금지 (에디터 영역)
+
+**에디터 영역에서 `NSViewRepresentable`, `NSViewControllerRepresentable` 사용 금지**
+
+```swift
+// 금지 - NavigationSplitView detail 영역에서 비활성 상태로 렌더링됨
+struct MyView: NSViewRepresentable { ... }
+struct MyViewController: NSViewControllerRepresentable { ... }
+
+// 권장 - 순수 SwiftUI 컴포넌트 사용
+TextEditor(text: $text)
+TextField("", text: $text)
+```
+
+**이유**: `NavigationSplitView`의 detail 영역에서 AppKit 래퍼(`NSViewRepresentable`)를 사용하면 컨트롤이 비활성(회색) 상태로 렌더링되는 버그 발생. 순수 SwiftUI 컴포넌트만 사용해야 정상 표시됨.
+
 ## 다국어 지원
 
 **모든 UI 텍스트는 `L10n`을 통해 표시** (상세: `Loreweave/Localization/claude.md`)
@@ -72,21 +88,47 @@ Color(nsColor: .secondaryLabelColor)
 
 **앱에서 필요한 권한은 `PermissionManager`를 통해 중앙 관리** (상세: `Loreweave/Services/Core/claude.md`)
 
-## 에디터 탭 시스템
+## 에디터 시스템
 
 **에디터 탭 관리는 `EditorTabManager`를 통해 중앙 관리** (상세: `Loreweave/Services/Editor/claude.md`)
 
+### 뷰 계층 구조
+
+```
+MainEditorView
+├── SidebarView (좌측)
+├── EditorContainerView (중앙) - 여러 EditorPanelView 관리
+│   └── EditorPanelView (1개 이상)
+│       ├── TabBarView
+│       ├── EditorToolbarView
+│       ├── TextEditorView
+│       └── EditorStatusBarView
+└── AIAssistantView (우측)
+```
+
+### 주요 컴포넌트
+
+| 컴포넌트 | 위치 | 역할 |
+|---------|------|------|
+| `MainEditorView` | `Views/` | 메인 에디터 윈도우 |
+| `EditorContainerView` | `Views/MainEditor/` | 여러 EditorPanel 관리 (향후 분할 뷰 지원) |
+| `EditorPanelView` | `Views/MainEditor/EditorPanel/` | 단일 에디터 영역 (탭바+툴바+에디터+상태바) |
+| `EditorToolbarView` | `Views/MainEditor/EditorPanel/` | 서식 툴바 (볼드, 정렬, 폰트 크기 등) |
+| `TextEditorView` | `Views/MainEditor/EditorPanel/` | 순수 SwiftUI TextEditor (줄번호 포함) |
+| `EditorStatusBarView` | `Views/MainEditor/EditorPanel/` | 상태바 (글자수, 줄수 등) |
+| `EditorTabManager` | `Services/Editor/` | 탭 상태 관리 (싱글톤) |
+
 ### 탭 열기 흐름
+
 1. 사이드바(`ProjectExplorerView`)에서 파일 클릭
 2. `EditorTabManager.openFile()` 호출
 3. `TabBarView`에 탭 표시 (이미 열린 파일이면 해당 탭 선택)
-4. `EditorView`에서 선택된 탭의 파일 내용 로드 및 표시
+4. `EditorPanelView` → `TextEditorView`에서 파일 내용 로드 및 표시
 
-### 주요 컴포넌트
-- `EditorTabManager`: 탭 상태 관리 (싱글톤)
-- `EditorTab`: 열린 파일 탭 모델 (`FileSystemItem` 참조)
-- `TabBarView`: 탭바 UI
-- `EditorView`: 파일 내용 편집기
+### 확장 가능 구조
+
+- `EditorContainerView`는 향후 분할 뷰(수평/수직) 지원 가능
+- `EditorPanelView`는 독립적인 탭 그룹으로 동작 가능
 
 ## 앱 시작 동작
 

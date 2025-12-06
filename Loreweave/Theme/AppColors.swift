@@ -86,9 +86,9 @@ enum AppColors {
         Color(nsColor: .controlAccentColor).opacity(0.15)
     }
 
-    /// 툴바 아이콘 색상 - 보조 라벨 (낮은 강조)
+    /// 툴바 아이콘 색상 - 기본 라벨 (항상 밝은 색상)
     static var toolbarIcon: Color {
-        Color(nsColor: .secondaryLabelColor)
+        Color(nsColor: .labelColor)
     }
 
     /// 툴바 아이콘 색상 (활성) - 기본 라벨 (높은 강조)
@@ -98,9 +98,9 @@ enum AppColors {
 
     // MARK: - Add Button (탭바 + 버튼)
 
-    /// 추가 버튼 아이콘 색상
+    /// 추가 버튼 아이콘 색상 - 기본 라벨 (항상 밝은 색상)
     static var addButtonIcon: Color {
-        Color(nsColor: .secondaryLabelColor)
+        Color(nsColor: .labelColor)
     }
 
     /// 추가 버튼 배경 (호버)
@@ -139,9 +139,9 @@ enum AppColors {
         Color(nsColor: .unemphasizedSelectedContentBackgroundColor).opacity(0.5)
     }
 
-    /// 사이드바 섹션 헤더 텍스트 - 보조 라벨
+    /// 사이드바 섹션 헤더 텍스트 - 기본 라벨 (항상 밝은 색상)
     static var sidebarHeaderText: Color {
-        Color(nsColor: .secondaryLabelColor)
+        Color(nsColor: .labelColor)
     }
 
     // MARK: - Content Area

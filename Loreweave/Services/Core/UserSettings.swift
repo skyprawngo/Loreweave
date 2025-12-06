@@ -269,6 +269,11 @@ final class UserSettings {
         set { defaults.set(newValue, forKey: Keys.lastOpenedProject) }
     }
 
+    /// 마지막으로 열린 프로젝트가 저장되어 있는지 확인 (Security-Scoped 접근 없이)
+    func hasLastOpenedProject() -> Bool {
+        return lastOpenedProjectBookmark != nil
+    }
+
     /// 마지막으로 열린 프로젝트 URL 가져오기
     func getLastOpenedProject() -> URL? {
         guard let bookmarkData = lastOpenedProjectBookmark else { return nil }

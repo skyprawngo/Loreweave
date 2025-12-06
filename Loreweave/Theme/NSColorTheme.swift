@@ -23,8 +23,10 @@ enum NSColorTheme {
 
     // MARK: - Text Colors
 
-    /// 에디터 기본 텍스트 - 텍스트 색상 사용
-    static var editorText: NSColor { .textColor }
+    /// 에디터 기본 텍스트 - labelColor 사용 (윈도우 활성/비활성에 영향받지 않음)
+    /// Note: textColor는 윈도우 비활성 시 회색으로 변하지만,
+    /// labelColor는 다크/라이트 모드에만 반응하고 항상 높은 대비 유지
+    static var editorText: NSColor { .labelColor }
 
     /// 기본 텍스트 - 가장 높은 대비
     static var textPrimary: NSColor { .labelColor }
@@ -43,11 +45,11 @@ enum NSColorTheme {
 
     // MARK: - Line Numbers
 
-    /// 줄번호 텍스트 (비선택) - 3차 라벨 (희미함)
-    static var lineNumber: NSColor { .tertiaryLabelColor }
+    /// 줄번호 텍스트 (비선택) - 보조 라벨 (적당한 대비)
+    static var lineNumber: NSColor { .secondaryLabelColor }
 
-    /// 줄번호 텍스트 (선택됨) - 보조 라벨 (좀 더 밝음)
-    static var lineNumberActive: NSColor { .secondaryLabelColor }
+    /// 줄번호 텍스트 (선택됨) - 기본 라벨 (높은 대비)
+    static var lineNumberActive: NSColor { .labelColor }
 
     // MARK: - Markdown Syntax
 
@@ -89,4 +91,27 @@ enum NSColorTheme {
 
     /// 보조 아이콘 - 보조 라벨
     static var iconSecondary: NSColor { .secondaryLabelColor }
+
+    // MARK: - Editor UI (Always Active Appearance)
+
+    /// 탭 텍스트 - 항상 밝은 색상
+    static var tabText: NSColor { .labelColor }
+
+    /// 탭 닫기 버튼 아이콘 - 항상 밝은 색상
+    static var tabCloseIcon: NSColor { .labelColor }
+
+    /// 툴바 아이콘 - 항상 밝은 색상
+    static var toolbarIcon: NSColor { .labelColor }
+
+    /// 툴바 버튼 배경 (호버) - 악센트 색상 기반
+    static var toolbarButtonHover: NSColor { .controlAccentColor.withAlphaComponent(0.15) }
+
+    /// 툴바 버튼 배경 (선택됨) - 악센트 색상 기반
+    static var toolbarButtonSelected: NSColor { .controlAccentColor.withAlphaComponent(0.2) }
+
+    /// 슬라이더 트랙 색상 - 악센트 색상
+    static var sliderTrack: NSColor { .controlAccentColor }
+
+    /// 상태바 텍스트 - 보조 라벨
+    static var statusBarText: NSColor { .secondaryLabelColor }
 }

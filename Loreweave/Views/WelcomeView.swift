@@ -137,7 +137,7 @@ struct WelcomeView: View {
     }
 
     private func openEditorWindow() {
-        openWindow(id: "editor", value: UUID())
+        openWindow(id: "editor")
         dismiss()
     }
 

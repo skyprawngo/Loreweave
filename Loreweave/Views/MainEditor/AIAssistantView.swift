@@ -53,6 +53,8 @@ struct AIFeedbackRequest: Identifiable {
 // MARK: - AI Assistant View
 
 struct AIAssistantView: View {
+    var onToggle: (() -> Void)?
+
     @State private var requests: [AIFeedbackRequest] = []
     @State private var selectedType: AIFeedbackRequest.FeedbackType = .refine
     @State private var startLine: Int = 1
@@ -61,8 +63,8 @@ struct AIAssistantView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 헤더
-            AIAssistantHeader()
+            // 헤더 (토글 버튼 포함)
+            AIAssistantHeader(onToggle: onToggle)
 
             // 새 첨삭 요청 영역
             NewFeedbackRequestSection(
@@ -80,7 +82,7 @@ struct AIAssistantView: View {
                 FeedbackRequestList(requests: requests)
             }
         }
-        .background(AppColors.controlBackground)
+        .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -118,6 +120,8 @@ struct AIAssistantView: View {
 // MARK: - Header
 
 struct AIAssistantHeader: View {
+    var onToggle: (() -> Void)?
+
     var body: some View {
         HStack {
             Image(systemName: "pencil.and.outline")
@@ -126,6 +130,17 @@ struct AIAssistantHeader: View {
                 .font(.headline)
 
             Spacer()
+
+            // 패널 닫기 버튼
+            if let onToggle = onToggle {
+                Button(action: onToggle) {
+                    Image(systemName: "sidebar.trailing")
+                        .font(.system(size: 14))
+                        .foregroundStyle(AppColors.toolbarIcon)
+                }
+                .buttonStyle(.plain)
+                .help(L10n.ai.togglePanel)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -386,6 +401,6 @@ struct FeedbackRequestCard: View {
 }
 
 #Preview {
-    AIAssistantView()
+    AIAssistantView(onToggle: {})
         .frame(width: 350, height: 600)
 }

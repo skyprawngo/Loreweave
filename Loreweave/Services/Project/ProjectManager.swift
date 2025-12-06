@@ -214,6 +214,11 @@ final class ProjectManager {
 
     /// .weaveproj 폴더에서 프로젝트 열기
     func openProjectFromFile(at url: URL) -> Project? {
+        // 기존 프로젝트가 있으면 세션 저장
+        if let currentPath = currentProject?.path {
+            EditorTabManager.shared.saveSession(to: currentPath)
+        }
+
         let metadata = metadataURL(for: url)
 
         do {
@@ -231,6 +236,13 @@ final class ProjectManager {
 
             addToRecentProjects(project)
             currentProject = project
+
+            // 마지막으로 열린 프로젝트 저장
+            UserSettings.shared.setLastOpenedProject(url)
+
+            // 에디터 세션 복원
+            EditorTabManager.shared.restoreSession(from: url)
+
             return project
         } catch {
             print("Failed to open project: \(error)")
@@ -239,6 +251,11 @@ final class ProjectManager {
     }
 
     func openProject(_ project: Project) {
+        // 기존 프로젝트가 있으면 세션 저장 후 닫기
+        if let currentPath = currentProject?.path {
+            EditorTabManager.shared.saveSession(to: currentPath)
+        }
+
         var updatedProject = project
         updatedProject.lastOpenedAt = Date()
 
@@ -270,14 +287,21 @@ final class ProjectManager {
         // 마지막으로 열린 프로젝트 저장
         if let projectPath = project.path {
             UserSettings.shared.setLastOpenedProject(projectPath)
+
+            // 에디터 세션 복원
+            EditorTabManager.shared.restoreSession(from: projectPath)
         }
     }
 
     func closeProject() {
-        // Security-Scoped Resource 접근 종료
+        // 세션 저장
         if let projectPath = currentProject?.path {
+            EditorTabManager.shared.saveSession(to: projectPath)
             stopAccessing(projectPath)
         }
+
+        // 탭 모두 닫기
+        EditorTabManager.shared.closeAllTabs()
         currentProject = nil
     }
 

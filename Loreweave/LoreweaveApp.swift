@@ -9,15 +9,17 @@ import SwiftUI
 
 @main
 struct LoreweaveApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var projectManager = ProjectManager.shared
     @State private var permissionManager = PermissionManager.shared
     @State private var appCommands = AppCommands.shared
     @State private var themeManager = ThemeManager.shared
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         // Welcome 윈도우 - 고정 크기, 최대화/최소화 불가
         Window(L10n.app.name, id: "welcome") {
-            AppRootView(
+            WelcomeWindowContent(
                 projectManager: projectManager,
                 permissionManager: permissionManager
             )
@@ -26,15 +28,20 @@ struct LoreweaveApp: App {
                 window.standardWindowButton(.miniaturizeButton)?.isEnabled = false
                 window.styleMask.remove(.resizable)
             })
+            .onReceive(NotificationCenter.default.publisher(for: .openEditorWindow)) { _ in
+                openWindow(id: "editor")
+            }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.center)
 
         // 메인 에디터 윈도우
-        WindowGroup(id: "editor", for: UUID.self) { _ in
-            MainEditorView(projectManager: projectManager)
-                .environmentObject(appCommands)
+        WindowGroup(id: "editor") {
+            DelayedContentView {
+                MainEditorView(projectManager: projectManager)
+                    .environmentObject(appCommands)
+            }
         }
         .windowStyle(.automatic)
         .defaultSize(width: 1400, height: 900)
@@ -55,19 +62,14 @@ struct LoreweaveApp: App {
     }
 }
 
-// MARK: - App Root View
+// MARK: - Welcome Window Content
 
-/// 앱 시작 시 권한 설정 여부 및 시작 동작 설정에 따라 화면 분기
-struct AppRootView: View {
+/// Welcome 윈도우 콘텐츠 (권한 설정 또는 Welcome 뷰)
+struct WelcomeWindowContent: View {
     @Bindable var projectManager: ProjectManager
     @Bindable var permissionManager: PermissionManager
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismissWindow) private var dismissWindow
 
     @State private var showWelcome = false
-    @State private var hasAttemptedAutoOpen = false
-
-    private var userSettings: UserSettings { UserSettings.shared }
 
     var body: some View {
         Group {
@@ -79,29 +81,33 @@ struct AppRootView: View {
                 }
             }
         }
-        .onAppear {
-            tryOpenLastProjectIfNeeded()
-        }
+    }
+}
+
+// MARK: - Delayed Content View
+
+/// 윈도우에 뷰가 완전히 연결될 때까지 콘텐츠 로딩을 지연
+/// First Responder 오류 방지용
+struct DelayedContentView<Content: View>: View {
+    let content: () -> Content
+    @State private var isReady = false
+
+    init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = content
     }
 
-    private func tryOpenLastProjectIfNeeded() {
-        guard !hasAttemptedAutoOpen else { return }
-        hasAttemptedAutoOpen = true
-
-        // 권한 설정이 완료되지 않았으면 시도하지 않음
-        guard permissionManager.hasCompletedPermissionSetup else { return }
-
-        // 마지막 프로젝트 자동 열기 설정이 아니면 시도하지 않음
-        guard userSettings.appLaunchBehavior == .openLastProject else { return }
-
-        // 마지막으로 열린 프로젝트 가져오기
-        guard let lastProjectURL = userSettings.getLastOpenedProject() else { return }
-
-        // 프로젝트 열기 시도
-        if let project = projectManager.openProjectFromFile(at: lastProjectURL) {
-            projectManager.openProject(project)
-            openWindow(id: "editor", value: UUID())
-            dismissWindow(id: "welcome")
+    var body: some View {
+        Group {
+            if isReady {
+                content()
+            } else {
+                Color.clear
+                    .onAppear {
+                        DispatchQueue.main.async {
+                            isReady = true
+                        }
+                    }
+            }
         }
     }
 }
@@ -122,4 +128,70 @@ struct WindowAccessor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+// MARK: - App Delegate
+
+/// 앱 시작/종료 관리
+class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+    /// 마지막 프로젝트 자동 열기 모드 여부
+    private var isAutoOpenMode = false
+
+    /// 앱 시작 직전 - 윈도우 표시 전에 호출됨
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let userSettings = UserSettings.shared
+        let permissionManager = PermissionManager.shared
+
+        // 자동 열기 조건 확인: 권한 설정 완료 + 마지막 프로젝트 열기 설정 + 마지막 프로젝트 존재
+        isAutoOpenMode = permissionManager.hasCompletedPermissionSetup
+            && userSettings.appLaunchBehavior == .openLastProject
+            && userSettings.hasLastOpenedProject()
+    }
+
+    /// 앱 시작 완료 - 윈도우 표시 후 호출됨
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if isAutoOpenMode {
+            // 마지막 프로젝트 열기 모드: Welcome 윈도우 닫고 에디터 열기
+            openLastProjectAndEditor()
+        }
+        // 그 외: Welcome 윈도우가 기본으로 열림 (SwiftUI Window 기본 동작)
+    }
+
+    /// 마지막 프로젝트를 열고 에디터 윈도우 표시
+    private func openLastProjectAndEditor() {
+        let projectManager = ProjectManager.shared
+
+        guard let lastProjectURL = UserSettings.shared.getLastOpenedProject(),
+              projectManager.openProjectFromFile(at: lastProjectURL) != nil else {
+            // 프로젝트 열기 실패 시 Welcome 윈도우 유지
+            return
+        }
+
+        // Welcome 윈도우 닫기
+        if let welcomeWindow = NSApp.windows.first(where: { $0.identifier?.rawValue == "welcome" }) {
+            welcomeWindow.close()
+        }
+
+        // 에디터 윈도우 열기 (NotificationCenter를 통해 SwiftUI openWindow 호출)
+        NotificationCenter.default.post(name: .openEditorWindow, object: nil)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // 현재 열린 프로젝트가 있으면 세션 저장
+        if let projectPath = ProjectManager.shared.currentProject?.path {
+            EditorTabManager.shared.saveSession(to: projectPath)
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // 마지막 윈도우가 닫혀도 앱 종료하지 않음 (macOS 표준 동작)
+        return false
+    }
+}
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    /// 에디터 윈도우 열기 요청
+    static let openEditorWindow = Notification.Name("openEditorWindow")
 }

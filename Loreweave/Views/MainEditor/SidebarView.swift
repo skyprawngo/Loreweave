@@ -7,8 +7,9 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(\.openSettings) private var openSettings
-    @State private var fileSystemManager = FileSystemManager.shared
-    @State private var projectManager = ProjectManager.shared
+
+    private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
+    private var projectManager: ProjectManager { ProjectManager.shared }
 
     var body: some View {
         VStack(spacing: 0) {

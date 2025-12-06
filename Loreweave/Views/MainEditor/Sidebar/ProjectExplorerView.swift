@@ -8,9 +8,10 @@
 import SwiftUI
 
 struct ProjectExplorerView: View {
-    @State private var fileSystemManager = FileSystemManager.shared
-    @State private var projectManager = ProjectManager.shared
-    @State private var tabManager = EditorTabManager.shared
+    private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
+    private var projectManager: ProjectManager { ProjectManager.shared }
+    private var tabManager: EditorTabManager { EditorTabManager.shared }
+
     @State private var selectedItem: FileSystemItem?
     @State private var isRefreshing: Bool = false
 

@@ -2,22 +2,40 @@
 //  MainEditorView.swift
 //  Loreweave
 //
-//  메인 에디터 화면 - 사이드바, 탭바, 에디터, AI 패널 포함
+//  메인 에디터 화면
+//  계층 구조:
+//  - MainEditorView (ZStack)
+//    ├── NavigationSplitView (배경, 에디터 우측 패딩으로 AI 패널 공간 확보)
+//    │   ├── SidebarView (sidebar)
+//    │   └── EditorContainerView (detail)
+//    └── AIAssistantView (오버레이, 우측)
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MainEditorView: View {
     @Bindable var projectManager: ProjectManager
     @EnvironmentObject var appCommands: AppCommands
-    @State private var fileSystemManager = FileSystemManager.shared
-    @State private var tabManager = EditorTabManager.shared
-    @State private var isAIPanelVisible: Bool = true
-    @State private var isSidebarVisible: Bool = true
-    @State private var searchText: String = ""
-    @State private var editorFontSize: CGFloat = 16
 
-    // 찾기/바꾸기 상태 (오버레이용)
+    private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
+    private var tabManager: EditorTabManager { EditorTabManager.shared }
+
+    // AI 패널 크기
+    private let aiPanelWidth: CGFloat = 350
+    private let aiPanelPadding: CGFloat = 8
+
+    /// AI 패널 전체 폭 (패널 폭 + 패딩)
+    private var aiPanelTotalWidth: CGFloat {
+        aiPanelWidth + aiPanelPadding * 2
+    }
+
+    // UI 상태
+    @State private var isAIPanelVisible: Bool = true
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var searchText: String = ""
+
+    // 찾기/바꾸기 상태
     @State private var showFindReplace: Bool = false
     @State private var findSearchText: String = ""
     @State private var replaceText: String = ""
@@ -26,84 +44,69 @@ struct MainEditorView: View {
     @State private var showReplaceField: Bool = false
     @State private var matchCount: Int = 0
 
-    // EditorView 참조용
-    @State private var editorView: EditorView?
-
     var body: some View {
-        NavigationSplitView(columnVisibility: Binding(
-            get: { isSidebarVisible ? .all : .detailOnly },
-            set: { isSidebarVisible = ($0 != .detailOnly) }
-        )) {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 300)
-        } detail: {
-            ZStack(alignment: .topTrailing) {
-                // 에디터 영역 (탭바 + 에디터)
-                ZStack(alignment: .top) {
-                    VStack(spacing: 0) {
-                        // 탭바
-                        TabBarView()
+        ZStack(alignment: .trailing) {
+            // 메인 콘텐츠 (NavigationSplitView)
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                // 사이드바
+                SidebarView()
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
+            } detail: {
+                // 에디터 컨테이너 (AI 패널 폭 정보 전달)
+                EditorContainerView(
+                    showFindReplace: $showFindReplace,
+                    findSearchText: $findSearchText,
+                    replaceText: $replaceText,
+                    searchScope: $searchScope,
+                    searchOptions: $searchOptions,
+                    showReplaceField: $showReplaceField,
+                    matchCount: $matchCount,
+                    trailingPadding: isAIPanelVisible ? aiPanelTotalWidth : 0
+                )
+                .environmentObject(appCommands)
+            }
+            .navigationSplitViewStyle(.balanced)
 
-                        // 에디터
-                        EditorView(
-                            showFindReplace: $showFindReplace,
-                            findSearchText: $findSearchText,
-                            replaceText: $replaceText,
-                            searchScope: $searchScope,
-                            searchOptions: $searchOptions,
-                            showReplaceField: $showReplaceField,
-                            matchCount: $matchCount
-                        )
-                        .environmentObject(appCommands)
+            // AI 첨삭 패널 (우측 오버레이)
+            if isAIPanelVisible {
+                AIAssistantView(onToggle: {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isAIPanelVisible = false
                     }
+                })
+                .padding(.horizontal, aiPanelPadding)
+                .padding(.bottom, aiPanelPadding)
+                .frame(width: aiPanelTotalWidth)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
 
-                    // 찾기/바꾸기 오버레이 (검색 필드 아래에 표시)
-                    if showFindReplace {
-                        VStack(spacing: 0) {
-                            FindReplaceView(
-                                isVisible: $showFindReplace,
-                                searchText: $findSearchText,
-                                replaceText: $replaceText,
-                                searchScope: $searchScope,
-                                searchOptions: $searchOptions,
-                                showReplace: $showReplaceField,
-                                matchCount: matchCount,
-                                onFind: { performFind() },
-                                onFindNext: { findNext() },
-                                onFindPrevious: { findPrevious() },
-                                onReplace: { replaceOne() },
-                                onReplaceAll: { replaceAll() }
-                            )
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(AppColors.barBackground)
-                                    .shadow(color: AppColors.shadowDrop, radius: 8, y: 4)
-                            )
-                            .padding(.horizontal, 16)
-                            .padding(.top, 8)
-
-                            Spacer()
+            // AI 패널 토글 버튼 (패널 닫혔을 때만 표시)
+            if !isAIPanelVisible {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                isAIPanelVisible = true
+                            }
+                        }) {
+                            Image(systemName: "sparkle")
+                                .font(.system(size: 14))
+                                .foregroundStyle(AppColors.toolbarIcon)
                         }
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .buttonStyle(.plain)
+                        .help(L10n.ai.togglePanel)
+                        .padding(.trailing, 16)
+                        .padding(.top, 14)
                     }
-                }
-                .padding(.trailing, isAIPanelVisible ? 350 : 0)
-                .animation(.easeInOut(duration: 0.25), value: isAIPanelVisible)
-
-                // AI 패널 (탭바와 동일 계층, 우측 오버레이)
-                if isAIPanelVisible {
-                    AIAssistantView()
-                        .frame(width: 350)
-                        .padding(.trailing, 8)
-                        .padding(.top, 8)
-                        .padding(.bottom, 8)
-                        .transition(.move(edge: .trailing))
+                    Spacer()
                 }
             }
         }
-        .navigationTitle("")
+        .animation(.easeInOut(duration: 0.25), value: isAIPanelVisible)
+        .animation(.easeInOut(duration: 0.25), value: columnVisibility)
         .toolbar {
-            // 이전/다음 네비게이션 버튼 (파인더 스타일)
+            // 네비게이션 버튼
             ToolbarItemGroup(placement: .navigation) {
                 NavigationButtonsView(
                     onBack: { goBack() },
@@ -111,10 +114,9 @@ struct MainEditorView: View {
                 )
             }
 
-            // 검색 텍스트박스
+            // 검색 필드
             ToolbarItem(placement: .principal) {
                 SearchFieldView(text: $searchText) {
-                    // 검색 필드 활성화 시 찾기/바꾸기 오버레이 표시
                     if !showFindReplace {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showFindReplace = true
@@ -122,29 +124,17 @@ struct MainEditorView: View {
                     }
                 }
             }
-
-            // AI 패널 토글 버튼
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isAIPanelVisible.toggle()
-                    }
-                }) {
-                    Image(systemName: "sparkle")
-                        .symbolVariant(isAIPanelVisible ? .none : .slash)
-                        .foregroundStyle(AppColors.accent)
-                }
-                .help(L10n.ai.togglePanel)
-            }
         }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .onAppear {
             initializeFileSystem()
+            // 앱을 활성화
+            NSApp.activate(ignoringOtherApps: true)
         }
         .onDisappear {
             fileSystemManager.closeProject()
         }
-        // 커맨드 핸들링 (저장은 EditorView에서 처리)
+        // 커맨드 핸들링
         .onReceive(appCommands.$closeTabRequested) { requested in
             if requested { handleCloseTab(); appCommands.closeTabRequested = false }
         }
@@ -152,7 +142,12 @@ struct MainEditorView: View {
             if requested { handleCloseAllTabs(); appCommands.closeAllTabsRequested = false }
         }
         .onReceive(appCommands.$toggleSidebarRequested) { requested in
-            if requested { isSidebarVisible.toggle(); appCommands.toggleSidebarRequested = false }
+            if requested {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    columnVisibility = columnVisibility == .all ? .detailOnly : .all
+                }
+                appCommands.toggleSidebarRequested = false
+            }
         }
         .onReceive(appCommands.$toggleAIPanelRequested) { requested in
             if requested {
@@ -180,7 +175,12 @@ struct MainEditorView: View {
         .onReceive(appCommands.$refreshProjectRequested) { requested in
             if requested { handleRefreshProject(); appCommands.refreshProjectRequested = false }
         }
-        // 툴바 검색 필드 입력 시 FindReplaceView 열기
+        .onReceive(appCommands.$openFileRequested) { requested in
+            if requested { handleOpenFile(); appCommands.openFileRequested = false }
+        }
+        .onReceive(appCommands.$openProjectRequested) { requested in
+            if requested { handleOpenProject(); appCommands.openProjectRequested = false }
+        }
         .onChange(of: searchText) { oldValue, newValue in
             if !newValue.isEmpty && oldValue.isEmpty {
                 appCommands.findRequested = true
@@ -188,7 +188,7 @@ struct MainEditorView: View {
         }
     }
 
-    // MARK: - File System Initialization
+    // MARK: - File System
 
     private func initializeFileSystem() {
         guard let projectPath = projectManager.currentProject?.path else { return }
@@ -200,86 +200,82 @@ struct MainEditorView: View {
         projectManager.closeProject()
     }
 
-    // MARK: - Navigation Actions
+    // MARK: - Navigation
 
     private func goBack() {
-        // TODO: 이전 파일/위치로 이동 기능 구현
+        // TODO: 이전 파일/위치로 이동
     }
 
     private func goForward() {
-        // TODO: 다음 파일/위치로 이동 기능 구현
+        // TODO: 다음 파일/위치로 이동
     }
 
     // MARK: - Command Handlers
 
-    /// 탭 닫기 처리
     private func handleCloseTab() {
         tabManager.closeCurrentTab()
     }
 
-    /// 모든 탭 닫기 처리
     private func handleCloseAllTabs() {
         tabManager.closeAllTabs()
     }
 
-    /// 다음 탭 이동
     private func handleNextTab() {
         tabManager.selectNextTab()
     }
 
-    /// 이전 탭 이동
     private func handlePreviousTab() {
         tabManager.selectPreviousTab()
     }
 
-    /// 특정 탭으로 이동
     private func handleGoToTab(_ index: Int) {
-        tabManager.selectTab(at: index - 1) // 1-based to 0-based
+        tabManager.selectTab(at: index - 1)
     }
 
-    /// 새 파일 생성
     private func handleNewFile() {
         guard let rootItem = fileSystemManager.projectRoot else { return }
         fileSystemManager.showNewFileDialog(in: rootItem) { _ in }
     }
 
-    // MARK: - Find/Replace Functions
-
-    /// 찾기 수행
-    private func performFind() {
-        // EditorView에서 실제 검색 로직 처리
-        // 여기서는 상태만 관리
-    }
-
-    /// 다음 찾기
-    private func findNext() {
-        performFind()
-    }
-
-    /// 이전 찾기
-    private func findPrevious() {
-        performFind()
-    }
-
-    /// 하나 바꾸기
-    private func replaceOne() {
-        // EditorView에서 처리
-    }
-
-    /// 모두 바꾸기
-    private func replaceAll() {
-        // EditorView에서 처리
-    }
-
-    /// 새 폴더 생성
     private func handleNewFolder() {
         guard let rootItem = fileSystemManager.projectRoot else { return }
         fileSystemManager.showNewFolderDialog(in: rootItem) { _ in }
     }
 
-    /// 프로젝트 새로고침
     private func handleRefreshProject() {
         fileSystemManager.refreshProject()
+    }
+
+    private func handleOpenFile() {
+        let panel = NSOpenPanel()
+        panel.title = L10n.get("shortcut.file.open")
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.text, .plainText, .utf8PlainText]
+
+        if let projectPath = projectManager.currentProject?.path {
+            panel.directoryURL = projectPath
+        }
+
+        guard panel.runModal() == .OK else { return }
+
+        for url in panel.urls {
+            let fileItem = FileSystemItem(url: url, isDirectory: false)
+            tabManager.openFile(fileItem)
+        }
+    }
+
+    private func handleOpenProject() {
+        guard let url = projectManager.showOpenPanel() else { return }
+
+        fileSystemManager.closeProject()
+        tabManager.closeAllTabs()
+
+        // openProjectFromFile이 세션도 복원함
+        if projectManager.openProjectFromFile(at: url) != nil {
+            initializeFileSystem()
+        }
     }
 }
 

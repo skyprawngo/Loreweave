@@ -7,6 +7,37 @@
 
 import Foundation
 
+// MARK: - Notification Names
+
+extension Notification.Name {
+    /// 에디터 탭이 변경됨 (추가, 삭제, 선택 변경 등)
+    static let editorTabsDidChange = Notification.Name("editorTabsDidChange")
+}
+
+// MARK: - Tab State (저장용)
+
+/// 탭 상태 저장을 위한 Codable 구조체
+struct TabState: Codable {
+    let relativePath: String  // 프로젝트 폴더 기준 상대 경로
+    let isModified: Bool
+
+    init(relativePath: String, isModified: Bool = false) {
+        self.relativePath = relativePath
+        self.isModified = isModified
+    }
+}
+
+/// 에디터 세션 상태 (탭 목록 + 선택된 탭)
+struct EditorSessionState: Codable {
+    let tabs: [TabState]
+    let selectedTabIndex: Int
+
+    init(tabs: [TabState], selectedTabIndex: Int) {
+        self.tabs = tabs
+        self.selectedTabIndex = selectedTabIndex
+    }
+}
+
 /// 에디터에서 열린 파일 탭
 struct EditorTab: Identifiable, Equatable {
     let id: UUID
@@ -57,7 +88,21 @@ final class EditorTabManager {
             if selectedTabIndex >= tabs.count && tabs.count > 0 {
                 selectedTabIndex = tabs.count - 1
             }
+            // 선택 탭 변경 시 세션 저장
+            if oldValue != selectedTabIndex {
+                autoSaveSessionIfNeeded()
+            }
         }
+    }
+
+    /// 세션 저장 필요 시 저장 (순환 호출 방지)
+    private var isSavingSession = false
+    private func autoSaveSessionIfNeeded() {
+        guard !isSavingSession else { return }
+        guard let projectPath = ProjectManager.shared.currentProject?.path else { return }
+        isSavingSession = true
+        saveSession(to: projectPath)
+        isSavingSession = false
     }
 
     /// 현재 선택된 탭
@@ -75,6 +120,7 @@ final class EditorTabManager {
         // 이미 열려있는 탭인지 확인
         if let existingIndex = tabs.firstIndex(where: { $0.fileItem.url == fileItem.url }) {
             selectedTabIndex = existingIndex
+            notifyTabsChanged()
             return
         }
 
@@ -82,6 +128,7 @@ final class EditorTabManager {
         let newTab = EditorTab(fileItem: fileItem)
         tabs.append(newTab)
         selectedTabIndex = tabs.count - 1
+        notifyTabsChanged()
     }
 
     /// 탭 닫기
@@ -104,12 +151,15 @@ final class EditorTabManager {
         } else if index < selectedTabIndex {
             selectedTabIndex -= 1
         }
+
+        notifyTabsChanged()
     }
 
     /// 특정 탭 선택
     func selectTab(at index: Int) {
         guard index >= 0 && index < tabs.count else { return }
         selectedTabIndex = index
+        notifyTabsChanged()
     }
 
     /// 새 빈 탭 생성 (제목 없음)
@@ -123,6 +173,7 @@ final class EditorTabManager {
         let newTab = EditorTab(fileItem: tempItem, isModified: true)
         tabs.append(newTab)
         selectedTabIndex = tabs.count - 1
+        notifyTabsChanged()
     }
 
     /// 탭의 수정 상태 변경
@@ -190,6 +241,7 @@ final class EditorTabManager {
         textCache.removeAll()
         tabs.removeAll()
         selectedTabIndex = 0
+        notifyTabsChanged()
     }
 
     /// 현재 탭 외 모든 탭 닫기
@@ -204,6 +256,7 @@ final class EditorTabManager {
 
         tabs = [tabToKeep]
         selectedTabIndex = 0
+        notifyTabsChanged()
     }
 
     /// URL로 탭 찾기
@@ -247,5 +300,102 @@ final class EditorTabManager {
         // 현재는 수정 플래그만 초기화
         guard selectedTabIndex >= 0 && selectedTabIndex < tabs.count else { return }
         // EditorView에서 직접 saveTab(at:content:) 호출하도록 구현 필요
+    }
+
+    // MARK: - Notifications
+
+    /// 탭 변경 알림 전송 (AppKit 컴포넌트 업데이트용)
+    private func notifyTabsChanged() {
+        NotificationCenter.default.post(name: .editorTabsDidChange, object: nil)
+        // 탭 변경 시 세션 자동 저장
+        autoSaveSessionIfNeeded()
+    }
+
+    // MARK: - Session Persistence
+
+    /// 세션 상태 파일명
+    private static let sessionFileName = "editor-session.json"
+
+    /// 프로젝트의 세션 파일 경로
+    private func sessionFileURL(for projectURL: URL) -> URL {
+        let projectName = projectURL.deletingPathExtension().lastPathComponent
+        let dataFolderName = ".\(projectName).\(ProjectManager.dataFolderExtension)"
+        let dataFolder = projectURL.appendingPathComponent(dataFolderName)
+        return dataFolder.appendingPathComponent(Self.sessionFileName)
+    }
+
+    /// 현재 탭 상태를 프로젝트에 저장
+    func saveSession(to projectURL: URL) {
+        // 탭 상태를 상대 경로로 변환
+        let tabStates = tabs.compactMap { tab -> TabState? in
+            let filePath = tab.url.path
+            let projectPath = projectURL.path
+
+            // 프로젝트 폴더 내 파일인지 확인
+            guard filePath.hasPrefix(projectPath) else { return nil }
+
+            // 상대 경로 계산
+            let relativePath = String(filePath.dropFirst(projectPath.count + 1))
+            return TabState(relativePath: relativePath, isModified: tab.isModified)
+        }
+
+        let sessionState = EditorSessionState(
+            tabs: tabStates,
+            selectedTabIndex: selectedTabIndex
+        )
+
+        let sessionFile = sessionFileURL(for: projectURL)
+
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(sessionState)
+            try data.write(to: sessionFile)
+        } catch {
+            print("Failed to save editor session: \(error)")
+        }
+    }
+
+    /// 프로젝트에서 탭 상태 복원
+    func restoreSession(from projectURL: URL) {
+        let sessionFile = sessionFileURL(for: projectURL)
+
+        guard FileManager.default.fileExists(atPath: sessionFile.path) else {
+            return
+        }
+
+        do {
+            let data = try Data(contentsOf: sessionFile)
+            let sessionState = try JSONDecoder().decode(EditorSessionState.self, from: data)
+
+            // 기존 탭 모두 닫기
+            closeAllTabs()
+
+            // 저장된 탭 복원
+            for tabState in sessionState.tabs {
+                let fileURL = projectURL.appendingPathComponent(tabState.relativePath)
+
+                // 파일이 존재하는지 확인
+                guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                    continue
+                }
+
+                // FileSystemItem 생성
+                let fileItem = FileSystemItem(url: fileURL, isDirectory: false)
+
+                // 탭 열기
+                let newTab = EditorTab(fileItem: fileItem, isModified: tabState.isModified)
+                tabs.append(newTab)
+            }
+
+            // 선택된 탭 인덱스 복원
+            if !tabs.isEmpty {
+                selectedTabIndex = min(sessionState.selectedTabIndex, tabs.count - 1)
+            }
+
+            notifyTabsChanged()
+        } catch {
+            print("Failed to restore editor session: \(error)")
+        }
     }
 }

@@ -8,8 +8,9 @@
 import SwiftUI
 
 struct TabBarView: View {
-    @State private var tabManager = EditorTabManager.shared
-    @State private var fileSystemManager = FileSystemManager.shared
+    private var tabManager: EditorTabManager { EditorTabManager.shared }
+    private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
+
     @State private var isAddButtonHovered = false
     @State private var isAddButtonPressed = false
 
@@ -54,12 +55,12 @@ struct TabBarView: View {
             .padding(.horizontal, 8)
         }
         .frame(height: 36)
-        .background(AppColors.barBackground)
         .overlay(alignment: .bottom) {
             if tabManager.tabs.isEmpty {
                 Divider()
             }
         }
+        .environment(\.controlActiveState, .key)
     }
 
     @ViewBuilder
