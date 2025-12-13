@@ -53,11 +53,11 @@ enum AppColors {
 
     // MARK: - Tab Bar
 
-    static var tabSelectedBackground: Color { currentTheme.tabSelectedBackground }
+    static var tabInactiveBackground: Color { currentTheme.tabInactiveBackground }
     static var tabHoverBackground: Color { currentTheme.tabHoverBackground }
     static var tabDefaultBackground: Color { currentTheme.tabDefaultBackground }
-    static var tabSelectedBorder: Color { currentTheme.tabSelectedBorder }
-    static var tabDefaultBorder: Color { currentTheme.tabDefaultBorder }
+    static var tabActiveBorder: Color { currentTheme.tabActiveBorder }
+    static var tabInactiveBorder: Color { currentTheme.tabInactiveBorder }
     static var tabText: Color { currentTheme.tabText }
     static var tabCloseHoverBackground: Color { currentTheme.tabCloseHoverBackground }
     static var tabSelectedShadow: Color { currentTheme.tabSelectedShadow }
@@ -131,5 +131,17 @@ enum AppColors {
 
     static var nsEditorBackground: NSColor {
         currentNSColorTheme?.nsEditorBackground ?? .textBackgroundColor
+    }
+
+    static var nsTextEditorBackground: NSColor {
+        currentNSColorTheme?.nsTextEditorBackground ?? .textBackgroundColor
+    }
+
+    static var nsCurrentLineHighlight: NSColor {
+        currentNSColorTheme?.nsCurrentLineHighlight ?? NSColor.selectedTextBackgroundColor.withAlphaComponent(0.1)
+    }
+
+    static var nsEditorCursor: NSColor {
+        currentNSColorTheme?.nsEditorCursor ?? .labelColor
     }
 }

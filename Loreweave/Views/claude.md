@@ -77,30 +77,24 @@ AppColors.tabHoverBackground (호버)
 - **패딩**: horizontal 8pt, vertical 4-5pt
 - **아이콘 크기**: 12pt (툴바), 13pt (일반)
 
-### NSTextView 에디터 설정 (LineNumberedTextEditorRepresentable 참고)
+### LoreEditor 커스텀 에디터
 
-**자동 줄바꿈**
+**Core Text 기반 행별 렌더링** - VSCode Monaco 스타일
+
+주요 컴포넌트:
+- `LoreEditorRepresentable`: SwiftUI-AppKit 브릿지 (NSViewRepresentable)
+- `LoreEditorView`: 통합 에디터 (거터 + 텍스트 + 스크롤)
+- `LoreTextView`: 텍스트 렌더링 및 입력 처리 (NSTextInputClient)
+- `GutterView`: 줄번호 표시
+- `LineRenderer`: Core Text 행 렌더링 + 캐싱
+
+**좌표계**: `isFlipped = true` (위에서 아래로)
+
+**Core Text 텍스트 매트릭스** (isFlipped 뷰에서 필수):
 ```swift
-// 컨테이너 너비에 맞춰 자동 줄바꿈
-textView.textContainer?.widthTracksTextView = true
-textView.textContainer?.heightTracksTextView = false
-```
-
-**텍스트 스타일 적용**
-```swift
-let paragraphStyle = NSMutableParagraphStyle()
-paragraphStyle.lineSpacing = lineSpacing
-paragraphStyle.alignment = textAlignment
-
-let attributes: [NSAttributedString.Key: Any] = [
-    .font: NSFont.systemFont(ofSize: fontSize),
-    .paragraphStyle: paragraphStyle,
-    .foregroundColor: NSColor.textColor
-]
-
-// typingAttributes와 textStorage 모두 업데이트 필요
-textView.typingAttributes = attributes
-textView.textStorage?.setAttributes(attributes, range: fullRange)
+context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+context.textPosition = CGPoint(x: x, y: y + baselineOffset)
+CTLineDraw(ctLine, context)
 ```
 
 ### 애니메이션 패턴
@@ -112,9 +106,12 @@ textView.textStorage?.setAttributes(attributes, range: fullRange)
 
 ### NSAlert 다이얼로그 설정
 
-**좌우 화살표 키 네비게이션**
-- 모든 `NSAlert` 다이얼로그에서 좌우 화살표 키로 버튼 간 이동 가능
-- `AlertHelper.beginSheetModal()` 또는 `alert.beginSheetModalWithArrowNavigation()` 사용
+**⚠️ 필수: 좌우 화살표 키 네비게이션**
+
+모든 `NSAlert` 다이얼로그는 반드시 방향키로 버튼 이동이 가능해야 합니다.
+
+- **금지**: `alert.beginSheetModal(for:completionHandler:)` 직접 사용
+- **필수**: `alert.beginSheetModalWithArrowNavigation(for:completionHandler:)` 사용
 
 ```swift
 let alert = NSAlert()
@@ -122,9 +119,14 @@ alert.messageText = "제목"
 alert.addButton(withTitle: "확인")
 alert.addButton(withTitle: "취소")
 
-// 좌우 화살표 키 네비게이션 활성화
+// ✅ 올바른 사용법 - 좌우 화살표 키 네비게이션 활성화
 alert.beginSheetModalWithArrowNavigation(for: window) { response in
     // 응답 처리
+}
+
+// ❌ 잘못된 사용법 - 방향키 네비게이션 불가
+alert.beginSheetModal(for: window) { response in
+    // ...
 }
 ```
 
@@ -171,15 +173,18 @@ textView.textStorage?.setAttributedString(attributedString)
 Views/
 ├── MainEditorView.swift                    # 메인 윈도우
 │   └── MainEditor/
-│       ├── SidebarView.swift               # 좌측 사이드바
-│       │   └── Sidebar/
-│       │       ├── ProjectExplorerView.swift
-│       │       └── FileSystemItemRow.swift
+│       ├── Sidebar/
+│       │   ├── ProjectExplorerView.swift
+│       │   └── FileSystemItemRow.swift
 │       ├── EditorContainerView.swift       # 에디터 컨테이너
 │       │   └── EditorPanel/
 │       │       ├── EditorToolbarView.swift     # 서식 툴바
-│       │       └── CodeEditorWrapperView.swift # STTextView 래퍼
-│       │           └── ExtendedSTTextView      # Scroll Beyond Last Line
+│       │       └── LoreTextView/               # 커스텀 에디터
+│       │           ├── LoreEditorRepresentable.swift
+│       │           ├── LoreEditorView.swift
+│       │           ├── LoreTextView.swift
+│       │           ├── GutterView.swift
+│       │           └── LineRenderer.swift
 │       ├── TabBarView.swift                # 탭바
 │       │   └── TabItemView
 │       ├── NavigationButtonsView.swift
@@ -197,39 +202,12 @@ Views/
 | 컴포넌트 | 역할 |
 |---------|------|
 | `MainEditorView` | 메인 윈도우 - NavigationSplitView + AI패널 |
-| `SidebarView` | 프로젝트 탐색기 |
 | `EditorContainerView` | 탭바 + 툴바 + 에디터 + 상태바 |
-| `CodeEditorWrapperView` | STTextView 래퍼 - 줄번호, 하이라이트 |
+| `LoreEditorRepresentable` | SwiftUI-AppKit 브릿지 |
+| `LoreEditorView` | 통합 에디터 (거터 + 텍스트 + 스크롤) |
+| `LoreTextView` | 텍스트 렌더링/입력 (NSTextInputClient) |
+| `GutterView` | 줄번호 표시 |
 | `AIAssistantView` | AI 첨삭 패널 |
-
-### ExtendedSTTextView (Scroll Beyond Last Line)
-
-`CodeEditorWrapperView` 내부에서 VSCode의 "Editor: Scroll Beyond Last Line" 기능 구현:
-
-```swift
-private class ExtendedSTTextView: STTextView {
-    var extraScrollHeight: CGFloat = 0
-    private var actualContentHeight: CGFloat = 0
-
-    override func setFrameSize(_ newSize: NSSize) {
-        actualContentHeight = newSize.height
-        super.setFrameSize(NSSize(width: newSize.width, height: newSize.height + extraScrollHeight))
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        let locationInView = convert(event.locationInWindow, from: nil)
-        if locationInView.y > actualContentHeight {
-            if let textLength = attributedText?.length {
-                selectAndShow(NSRange(location: textLength, length: 0))
-            }
-            return
-        }
-        super.mouseDown(with: event)
-    }
-}
-```
-
-**핵심**: STTextView는 `setFrameSize`로 크기 결정 → 오버라이드로 `extraScrollHeight` 추가
 
 ### 새 뷰 추가 시
 

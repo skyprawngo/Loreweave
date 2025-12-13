@@ -6,7 +6,7 @@
 //  계층 구조:
 //  - MainEditorView (HStack)
 //    ├── NavigationSplitView
-//    │   ├── SidebarView (sidebar)
+//    │   ├── ProjectExplorerView (sidebar)
 //    │   └── EditorContainerView (detail)
 //    └── AIAssistantView (우측 패널)
 //
@@ -19,7 +19,7 @@ struct MainEditorView: View {
     @EnvironmentObject var appCommands: AppCommands
 
     private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
-    private var tabManager: EditorTabManager { EditorTabManager.shared }
+    @State private var tabManager = EditorTabManager.shared
 
     // AI 패널 크기
     private let aiPanelWidth: CGFloat = 350
@@ -28,28 +28,35 @@ struct MainEditorView: View {
     @State private var isAIPanelVisible: Bool = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var searchText: String = ""
+    @State private var isSpotlightExpanded: Bool = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            // 메인 콘텐츠 (NavigationSplitView)
-            NavigationSplitView(columnVisibility: $columnVisibility) {
-                // 사이드바
-                SidebarView()
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
-            } detail: {
-                // 에디터 컨테이너
-                EditorContainerView(trailingPadding: 0)
-                    .environmentObject(appCommands)
-            }
-            .navigationSplitViewStyle(.balanced)
+        ZStack(alignment: .top) {
+            // 메인 콘텐츠
+            HStack(spacing: 0) {
+                // 메인 콘텐츠 (NavigationSplitView)
+                NavigationSplitView(columnVisibility: $columnVisibility) {
+                    // 사이드바 (ProjectExplorerView)
+                    ProjectExplorerView()
+                        .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
+                } detail: {
+                    // 에디터 컨테이너
+                    EditorContainerView(projectManager: projectManager)
+                        .environmentObject(appCommands)
+                }
+                .navigationSplitViewStyle(.balanced)
 
-            // AI 첨삭 패널 (우측)
-            if isAIPanelVisible {
-                AIAssistantView()
-                    .frame(width: aiPanelWidth)
-                    .ignoresSafeArea(.container, edges: .top)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                // AI 첨삭 패널 (우측)
+                if isAIPanelVisible {
+                    AIAssistantView()
+                        .frame(width: aiPanelWidth)
+                        .ignoresSafeArea(.container, edges: .top)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
+
+            // 스포트라이트 확장 오버레이
+            SpotlightOverlay(text: $searchText, isExpanded: $isSpotlightExpanded)
         }
         .background(ThemeAwareBackground(material: .sidebar, blendingMode: .behindWindow))
         .ignoresSafeArea(.container, edges: .top)
@@ -62,13 +69,6 @@ struct MainEditorView: View {
                     onBack: { goBack() },
                     onForward: { goForward() }
                 )
-            }
-
-            // 스포트라이트 검색
-            ToolbarItem(placement: .principal) {
-                SpotlightView(text: $searchText) {
-                    // TODO: 검색 기능 구현
-                }
             }
 
             // AI 패널 토글 버튼
@@ -86,59 +86,20 @@ struct MainEditorView: View {
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .onAppear {
             initializeFileSystem()
-            // 앱을 활성화
             NSApp.activate(ignoringOtherApps: true)
         }
         .onDisappear {
             fileSystemManager.closeProject()
         }
-        // 커맨드 핸들링
-        .onReceive(appCommands.$closeTabRequested) { requested in
-            if requested { handleCloseTab(); appCommands.closeTabRequested = false }
-        }
-        .onReceive(appCommands.$closeAllTabsRequested) { requested in
-            if requested { handleCloseAllTabs(); appCommands.closeAllTabsRequested = false }
-        }
-        .onReceive(appCommands.$toggleSidebarRequested) { requested in
-            if requested {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    columnVisibility = columnVisibility == .all ? .detailOnly : .all
-                }
-                appCommands.toggleSidebarRequested = false
-            }
-        }
-        .onReceive(appCommands.$toggleAIPanelRequested) { requested in
-            if requested {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isAIPanelVisible.toggle()
-                }
-                appCommands.toggleAIPanelRequested = false
-            }
-        }
-        .onReceive(appCommands.$nextTabRequested) { requested in
-            if requested { handleNextTab(); appCommands.nextTabRequested = false }
-        }
-        .onReceive(appCommands.$previousTabRequested) { requested in
-            if requested { handlePreviousTab(); appCommands.previousTabRequested = false }
-        }
-        .onReceive(appCommands.$goToTabRequested) { tabIndex in
-            if let index = tabIndex { handleGoToTab(index); appCommands.goToTabRequested = nil }
-        }
-        .onReceive(appCommands.$newFileRequested) { requested in
-            if requested { handleNewFile(); appCommands.newFileRequested = false }
-        }
-        .onReceive(appCommands.$newFolderRequested) { requested in
-            if requested { handleNewFolder(); appCommands.newFolderRequested = false }
-        }
-        .onReceive(appCommands.$refreshProjectRequested) { requested in
-            if requested { handleRefreshProject(); appCommands.refreshProjectRequested = false }
-        }
-        .onReceive(appCommands.$openFileRequested) { requested in
-            if requested { handleOpenFile(); appCommands.openFileRequested = false }
-        }
-        .onReceive(appCommands.$openProjectRequested) { requested in
-            if requested { handleOpenProject(); appCommands.openProjectRequested = false }
-        }
+        .appCommandHandler(
+            appCommands: appCommands,
+            tabManager: tabManager,
+            fileSystemManager: fileSystemManager,
+            projectManager: projectManager,
+            isAIPanelVisible: $isAIPanelVisible,
+            columnVisibility: $columnVisibility,
+            onInitializeFileSystem: initializeFileSystem
+        )
     }
 
     // MARK: - File System
@@ -146,11 +107,6 @@ struct MainEditorView: View {
     private func initializeFileSystem() {
         guard let projectPath = projectManager.currentProject?.path else { return }
         fileSystemManager.initializeProject(at: projectPath)
-    }
-
-    private func closeProjectAndCleanup() {
-        fileSystemManager.closeProject()
-        projectManager.closeProject()
     }
 
     // MARK: - Navigation
@@ -162,41 +118,105 @@ struct MainEditorView: View {
     private func goForward() {
         // TODO: 다음 파일/위치로 이동
     }
+}
 
-    // MARK: - Command Handlers
+// MARK: - App Command Handler Modifier
 
-    private func handleCloseTab() {
-        tabManager.closeCurrentTab()
-    }
+/// 앱 커맨드 핸들러를 통합한 ViewModifier
+struct AppCommandHandlerModifier: ViewModifier {
+    let appCommands: AppCommands
+    let tabManager: EditorTabManager
+    let fileSystemManager: FileSystemManager
+    let projectManager: ProjectManager
+    @Binding var isAIPanelVisible: Bool
+    @Binding var columnVisibility: NavigationSplitViewVisibility
+    let onInitializeFileSystem: () -> Void
 
-    private func handleCloseAllTabs() {
-        tabManager.closeAllTabs()
-    }
-
-    private func handleNextTab() {
-        tabManager.selectNextTab()
-    }
-
-    private func handlePreviousTab() {
-        tabManager.selectPreviousTab()
-    }
-
-    private func handleGoToTab(_ index: Int) {
-        tabManager.selectTab(at: index - 1)
-    }
-
-    private func handleNewFile() {
-        guard let rootItem = fileSystemManager.projectRoot else { return }
-        fileSystemManager.showNewFileDialog(in: rootItem) { _ in }
-    }
-
-    private func handleNewFolder() {
-        guard let rootItem = fileSystemManager.projectRoot else { return }
-        fileSystemManager.showNewFolderDialog(in: rootItem) { _ in }
-    }
-
-    private func handleRefreshProject() {
-        fileSystemManager.refreshProject()
+    func body(content: Content) -> some View {
+        content
+            // 탭 관련 커맨드
+            .onReceive(appCommands.$closeTabRequested) { requested in
+                if requested {
+                    tabManager.closeCurrentTab()
+                    appCommands.closeTabRequested = false
+                }
+            }
+            .onReceive(appCommands.$closeAllTabsRequested) { requested in
+                if requested {
+                    tabManager.closeAllTabs()
+                    appCommands.closeAllTabsRequested = false
+                }
+            }
+            .onReceive(appCommands.$nextTabRequested) { requested in
+                if requested {
+                    tabManager.selectNextTab()
+                    appCommands.nextTabRequested = false
+                }
+            }
+            .onReceive(appCommands.$previousTabRequested) { requested in
+                if requested {
+                    tabManager.selectPreviousTab()
+                    appCommands.previousTabRequested = false
+                }
+            }
+            .onReceive(appCommands.$goToTabRequested) { tabIndex in
+                if let index = tabIndex {
+                    tabManager.selectTab(at: index - 1)
+                    appCommands.goToTabRequested = nil
+                }
+            }
+            // UI 토글 커맨드
+            .onReceive(appCommands.$toggleSidebarRequested) { requested in
+                if requested {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        columnVisibility = columnVisibility == .all ? .detailOnly : .all
+                    }
+                    appCommands.toggleSidebarRequested = false
+                }
+            }
+            .onReceive(appCommands.$toggleAIPanelRequested) { requested in
+                if requested {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isAIPanelVisible.toggle()
+                    }
+                    appCommands.toggleAIPanelRequested = false
+                }
+            }
+            // 파일/폴더 커맨드
+            .onReceive(appCommands.$newFileRequested) { requested in
+                if requested {
+                    if let rootItem = fileSystemManager.projectRoot {
+                        fileSystemManager.showNewFileDialog(in: rootItem) { _ in }
+                    }
+                    appCommands.newFileRequested = false
+                }
+            }
+            .onReceive(appCommands.$newFolderRequested) { requested in
+                if requested {
+                    if let rootItem = fileSystemManager.projectRoot {
+                        fileSystemManager.showNewFolderDialog(in: rootItem) { _ in }
+                    }
+                    appCommands.newFolderRequested = false
+                }
+            }
+            .onReceive(appCommands.$refreshProjectRequested) { requested in
+                if requested {
+                    fileSystemManager.refreshProject()
+                    appCommands.refreshProjectRequested = false
+                }
+            }
+            .onReceive(appCommands.$openFileRequested) { requested in
+                if requested {
+                    handleOpenFile()
+                    appCommands.openFileRequested = false
+                }
+            }
+            .onReceive(appCommands.$openProjectRequested) { requested in
+                if requested {
+                    handleOpenProject()
+                    appCommands.openProjectRequested = false
+                }
+            }
     }
 
     private func handleOpenFile() {
@@ -222,13 +242,35 @@ struct MainEditorView: View {
     private func handleOpenProject() {
         guard let url = projectManager.showOpenPanel() else { return }
 
+        // 기존 프로젝트 닫기 (세션 저장 포함)
         fileSystemManager.closeProject()
-        tabManager.closeAllTabs()
 
-        // openProjectFromFile이 세션도 복원함
+        // 새 프로젝트 열기 (openProjectFromFile 내부에서 세션 복원됨)
         if projectManager.openProjectFromFile(at: url) != nil {
-            initializeFileSystem()
+            onInitializeFileSystem()
         }
+    }
+}
+
+extension View {
+    func appCommandHandler(
+        appCommands: AppCommands,
+        tabManager: EditorTabManager,
+        fileSystemManager: FileSystemManager,
+        projectManager: ProjectManager,
+        isAIPanelVisible: Binding<Bool>,
+        columnVisibility: Binding<NavigationSplitViewVisibility>,
+        onInitializeFileSystem: @escaping () -> Void
+    ) -> some View {
+        modifier(AppCommandHandlerModifier(
+            appCommands: appCommands,
+            tabManager: tabManager,
+            fileSystemManager: fileSystemManager,
+            projectManager: projectManager,
+            isAIPanelVisible: isAIPanelVisible,
+            columnVisibility: columnVisibility,
+            onInitializeFileSystem: onInitializeFileSystem
+        ))
     }
 }
 

@@ -24,11 +24,20 @@
 
 ### 에디터 텍스트뷰
 
-**STTextView 라이브러리 사용** (krzyzanowskim/STTextView)
+**커스텀 LoreEditor 사용** (자체 구현)
 
-- 줄번호(gutter), 현재 줄 하이라이트 지원
-- `CodeEditorWrapperView`에서 `NSViewRepresentable`로 래핑
-- 폰트/줄간격 설정은 `defaultParagraphStyle`과 `attributedText`에 동시 적용 필요
+- Core Text 기반 행별 렌더링 (VSCode Monaco 스타일)
+- `LoreEditorRepresentable`에서 `NSViewRepresentable`로 래핑
+- 주요 컴포넌트:
+  - `LoreEditorView`: 통합 에디터 뷰 (거터 + 텍스트 + 스크롤)
+  - `LoreTextView`: 텍스트 렌더링 및 입력 처리
+  - `GutterView`: 줄번호 표시
+  - `LineRenderer`: Core Text 행 렌더링
+- TextEngine (`Services/Editor/TextEngine/`):
+  - `EditorState`: 에디터 통합 상태
+  - `TextDocument`: 행 기반 문서 모델
+  - `TextSelection`: 커서/선택 관리
+  - `ViewportManager`: 가상 스크롤 뷰포트
 
 ## 다국어 지원
 
@@ -98,7 +107,10 @@ MainEditorView
 │   └── EditorContainerView (중앙)
 │       ├── TabBarView
 │       ├── EditorToolbarView
-│       ├── CodeEditorWrapperView (STTextView 래퍼)
+│       ├── LoreEditorRepresentable (커스텀 에디터)
+│       │   └── LoreEditorView
+│       │       ├── GutterView (줄번호)
+│       │       └── LoreTextView (텍스트)
 │       └── EditorStatusBarView
 └── AIAssistantView (우측)
 ```
@@ -109,7 +121,10 @@ MainEditorView
 |---------|------|------|
 | `MainEditorView` | `Views/` | 메인 에디터 윈도우 |
 | `EditorContainerView` | `Views/MainEditor/` | 에디터 영역 (탭바+툴바+에디터+상태바) |
-| `CodeEditorWrapperView` | `Views/MainEditor/EditorPanel/` | STTextView 래퍼 (줄번호, 하이라이트) |
+| `LoreEditorRepresentable` | `Views/MainEditor/EditorPanel/LoreTextView/` | SwiftUI-AppKit 브릿지 |
+| `LoreEditorView` | `Views/MainEditor/EditorPanel/LoreTextView/` | 통합 에디터 (거터+텍스트+스크롤) |
+| `LoreTextView` | `Views/MainEditor/EditorPanel/LoreTextView/` | 텍스트 렌더링/입력 |
+| `GutterView` | `Views/MainEditor/EditorPanel/LoreTextView/` | 줄번호 표시 |
 | `EditorToolbarView` | `Views/MainEditor/EditorPanel/` | 서식 툴바 (볼드, 폰트 크기, 줄간격) |
 | `EditorStatusBarView` | `Views/MainEditor/EditorContainerView.swift` | 상태바 (글자수, 줄수) |
 | `EditorTabManager` | `Services/Editor/` | 탭 상태 관리 (싱글톤) |
@@ -125,7 +140,7 @@ MainEditorView
 1. 사이드바(`ProjectExplorerView`)에서 파일 클릭
 2. `EditorTabManager.openFile()` 호출
 3. `TabBarView`에 탭 표시 (이미 열린 파일이면 해당 탭 선택)
-4. `EditorContainerView` → `CodeEditorWrapperView`에서 파일 내용 로드 및 표시
+4. `EditorContainerView` → `LoreEditorRepresentable`에서 파일 내용 로드 및 표시
 
 ## 앱 시작 동작
 
@@ -134,6 +149,73 @@ MainEditorView
 - `showWelcome`: 시작 화면 표시 (기본값)
 - `openLastProject`: 마지막 프로젝트 자동 열기
 - 마지막 프로젝트는 `ProjectManager.openProject()` 호출 시 `UserSettings`에 자동 저장
+
+## 단축키 시스템
+
+**모든 단축키는 `KeyboardShortcutManager`를 통해 중앙 관리** (위치: `Loreweave/Services/Core/KeyboardShortcutManager.swift`)
+
+### 새 단축키 추가 시 필수 단계
+
+1. **`ShortcutAction` 열거형에 액션 추가**
+   ```swift
+   enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
+       // 적절한 카테고리에 추가
+       case myNewAction = "category.myNewAction"
+   }
+   ```
+
+2. **카테고리 분류 추가** (`category` 프로퍼티)
+   ```swift
+   var category: ShortcutCategory {
+       switch self {
+       case .myNewAction:
+           return .file  // 적절한 카테고리 선택
+       }
+   }
+   ```
+
+3. **기본 단축키 설정** (`defaultBindings`에 추가)
+   ```swift
+   ShortcutBinding(action: .myNewAction, key: "m", modifiers: [.command, .shift], isEnabled: true),
+   ```
+
+4. **다국어 키 추가** (`en.json`, `ko.json`, `ja.json`)
+   ```json
+   "shortcut.category.myNewAction": "My New Action"
+   ```
+
+5. **`AppCommands`에서 액션 연결** (메뉴 커맨드인 경우)
+   - `LoreweaveApp.swift`의 `.commands` 블록에서 단축키 적용
+
+### 단축키 카테고리
+
+| 카테고리 | 설명 | 예시 |
+|---------|------|------|
+| `file` | 파일 관련 | 새 파일, 저장, 탭 닫기 |
+| `edit` | 편집 관련 | 실행 취소, 복사, 붙여넣기 |
+| `view` | 보기 관련 | 사이드바 토글, 확대/축소 |
+| `tab` | 탭 네비게이션 | 다음/이전 탭, 탭 번호 이동 |
+| `ai` | AI 기능 | 이어쓰기, 다듬기, 요약 |
+| `project` | 프로젝트 관련 | 프로젝트 열기, 새로 만들기 |
+
+### 단축키 하드코딩 금지
+
+**뷰에서 단축키를 직접 하드코딩하지 말 것** - 반드시 `KeyboardShortcutManager` 사용
+
+```swift
+// 금지 - 하드코딩
+Button("Save") { ... }
+    .keyboardShortcut("s", modifiers: .command)
+
+// 권장 - KeyboardShortcutManager 사용
+Button("Save") { ... }
+    .keyboardShortcut(shortcutManager.binding(for: .save)?.keyboardShortcut)
+```
+
+**이유**:
+- 사용자가 설정에서 단축키를 변경할 수 있어야 함
+- 단축키 충돌 감지 및 관리 가능
+- JSON 파일로 저장되어 앱 재시작 후에도 유지
 
 ## 복잡한 작업 지시 시 루프백 체계
 

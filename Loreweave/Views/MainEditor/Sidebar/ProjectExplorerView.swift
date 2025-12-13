@@ -3,63 +3,112 @@
 //  Loreweave
 //
 //  프로젝트 탐색기 뷰 (파인더 스타일)
+//  - SidebarView 통합
+//  - 플랫 리스트 기반 렌더링 (재귀 없음)
 //
 
 import SwiftUI
 
+/// 플랫 리스트용 항목 데이터 (depth, treeLines 포함)
+struct FlatFileItem: Identifiable {
+    let id: UUID
+    let item: FileSystemItem
+    let depth: Int
+    let parentTreeLines: [Bool]
+
+    init(item: FileSystemItem, depth: Int, parentTreeLines: [Bool]) {
+        self.id = item.id
+        self.item = item
+        self.depth = depth
+        self.parentTreeLines = parentTreeLines
+    }
+}
+
 struct ProjectExplorerView: View {
+    @Environment(\.openSettings) private var openSettings
+
     private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
     private var projectManager: ProjectManager { ProjectManager.shared }
-    private var tabManager: EditorTabManager { EditorTabManager.shared }
+    @State private var tabManager = EditorTabManager.shared
 
-    @State private var selectedItem: FileSystemItem?
+    /// 선택된 항목들 (다중 선택 지원)
+    @State private var selectedItemIds: Set<UUID> = []
+    /// 마지막으로 단일 선택된 항목 ID (Shift 범위 선택의 기준점)
+    @State private var lastSelectedItemId: UUID?
     @State private var isRefreshing: Bool = false
+
+    /// 캐시된 플랫 리스트 (렌더링 + Shift 범위 선택용)
+    @State private var flatList: [FlatFileItem] = []
+    /// 캐시된 URL → Item 매핑 (드래그 앤 드롭용)
+    @State private var itemByURL: [URL: FileSystemItem] = [:]
+
+    /// NSEvent 키 모니터
+    @State private var keyMonitor: Any?
+    /// 뷰가 호버 중인지 여부 (키 이벤트 처리 조건)
+    @State private var isViewHovered: Bool = false
 
     /// EditorView에서 현재 편집 중인 내용을 가져오기 위한 콜백
     var getCurrentEditorContent: (() -> String?)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // 헤더
-            explorerHeader
+        VStack(spacing: 0) {
+            // 프로젝트 탐색기 메인 콘텐츠
+            VStack(alignment: .leading, spacing: 0) {
+                explorerHeader
 
-            Divider()
+                Divider()
 
-            // 파일 트리
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if let rootItem = fileSystemManager.projectRoot {
-                        if let children = rootItem.children, !children.isEmpty {
-                            ForEach(children) { item in
-                                FileSystemItemRow(
-                                    item: item,
-                                    depth: 0,
-                                    onSelect: { selected in
-                                        handleSingleClick(selected)
-                                    },
-                                    onDoubleClick: { item in
-                                        handleDoubleClick(item)
-                                    },
-                                    onMoveItem: { sourceItem, destinationFolder in
-                                        handleMoveItem(sourceItem, to: destinationFolder)
-                                    },
-                                    isSelected: selectedItem?.id == item.id,
-                                    selectedItemId: selectedItem?.id
-                                )
+                // 파일 트리 (플랫 리스트 기반)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if fileSystemManager.projectRoot != nil {
+                            if !flatList.isEmpty {
+                                ForEach(flatList) { flatItem in
+                                    FileSystemItemRow(
+                                        item: flatItem.item,
+                                        depth: flatItem.depth,
+                                        onSelect: handleSelection,
+                                        onMoveItem: { handleMoveItem($0, to: $1) },
+                                        onCacheUpdate: updateCache,
+                                        onItemDeleted: { closeTabsForDeletedItems([$0]) },
+                                        isItemSelected: { selectedItemIds.contains($0) },
+                                        findItemByURL: { itemByURL[$0] },
+                                        parentTreeLines: flatItem.parentTreeLines
+                                    )
+                                }
+                            } else {
+                                emptyStateView
                             }
                         } else {
-                            emptyStateView
+                            noProjectView
                         }
-                    } else {
-                        noProjectView
                     }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 4)
                 }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 4)
+                .frame(maxHeight: .infinity)
             }
+            .contextMenu { rootContextMenu }
             .frame(maxHeight: .infinity)
+
+            // 설정 버튼 (하단)
+            settingsFooter
         }
-        .contextMenu { rootContextMenu }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle(projectManager.currentProject?.name ?? "")
+        .onHover { hovering in
+            isViewHovered = hovering
+        }
+        .onChange(of: fileSystemManager.projectRoot?.id) { _, _ in
+            updateCache()
+        }
+        .onAppear {
+            updateCache()
+            setupKeyMonitor()
+        }
+        .onDisappear {
+            removeKeyMonitor()
+        }
     }
 
     // MARK: - Header
@@ -111,6 +160,22 @@ struct ProjectExplorerView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+    }
+
+    // MARK: - Settings Footer (SidebarView에서 통합)
+
+    private var settingsFooter: some View {
+        HStack {
+            Spacer()
+            Button(action: { openSettings() }) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14))
+                    .foregroundStyle(AppColors.toolbarIcon)
+            }
+            .buttonStyle(.plain)
+            .help(L10n.sidebar.settings)
+            .padding(8)
+        }
     }
 
     // MARK: - Empty State
@@ -176,6 +241,29 @@ struct ProjectExplorerView: View {
         }
     }
 
+    // MARK: - Key Monitor
+
+    private func setupKeyMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
+            if event.modifierFlags.contains(.command) && event.keyCode == 51 {
+                if !selectedItemIds.isEmpty && isViewHovered {
+                    DispatchQueue.main.async {
+                        deleteSelectedItems()
+                    }
+                    return nil
+                }
+            }
+            return event
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyMonitor = nil
+        }
+    }
+
     // MARK: - Actions
 
     private func refresh() {
@@ -183,89 +271,216 @@ struct ProjectExplorerView: View {
         fileSystemManager.refreshProject()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             isRefreshing = false
+            updateCache()
         }
     }
 
     private func showNewFileDialog() {
         guard let rootItem = fileSystemManager.projectRoot else { return }
-        fileSystemManager.showNewFileDialog(in: rootItem) { _ in }
+        fileSystemManager.showNewFileDialog(in: rootItem) { newItem in
+            if newItem != nil {
+                updateCache()
+            }
+        }
     }
 
     private func showNewFolderDialog() {
         guard let rootItem = fileSystemManager.projectRoot else { return }
-        fileSystemManager.showNewFolderDialog(in: rootItem) { _ in }
-    }
-
-    private func handleDoubleClick(_ item: FileSystemItem) {
-        if !item.isDirectory {
-            tabManager.openFile(item)
+        fileSystemManager.showNewFolderDialog(in: rootItem) { newItem in
+            if newItem != nil {
+                updateCache()
+            }
         }
     }
 
-    private func handleSingleClick(_ item: FileSystemItem) {
-        selectedItem = item
-        fileSystemManager.selectedItem = item
-        // 파일인 경우 탭으로 열기
-        if !item.isDirectory {
-            tabManager.openFile(item)
+    /// 선택 처리 (Shift/Command 키 지원)
+    private func handleSelection(_ item: FileSystemItem, modifiers: EventModifiers) {
+        if modifiers.contains(.shift), let lastId = lastSelectedItemId {
+            // Shift+클릭: 범위 선택
+            if let startIndex = flatList.firstIndex(where: { $0.id == lastId }),
+               let endIndex = flatList.firstIndex(where: { $0.id == item.id }) {
+                let range = startIndex <= endIndex ? startIndex...endIndex : endIndex...startIndex
+                let rangeIds = Set(flatList[range].map { $0.id })
+                selectedItemIds = rangeIds
+            }
+        } else if modifiers.contains(.command) {
+            // Command+클릭: 토글 선택
+            if selectedItemIds.contains(item.id) {
+                selectedItemIds.remove(item.id)
+                if lastSelectedItemId == item.id {
+                    lastSelectedItemId = selectedItemIds.first
+                }
+            } else {
+                selectedItemIds.insert(item.id)
+                lastSelectedItemId = item.id
+            }
+        } else {
+            // 일반 클릭: 단일 선택
+            selectedItemIds = [item.id]
+            lastSelectedItemId = item.id
+            fileSystemManager.selectedItem = item
+            if !item.isDirectory {
+                tabManager.openFile(item)
+            }
+        }
+    }
+
+    // MARK: - Cache Management
+
+    /// 플랫 리스트 캐시 갱신
+    private func updateCache() {
+        guard let rootItem = fileSystemManager.projectRoot,
+              let children = rootItem.children else {
+            flatList = []
+            itemByURL = [:]
+            return
+        }
+
+        var newFlatList: [FlatFileItem] = []
+        var urlMap: [URL: FileSystemItem] = [:]
+
+        for (index, child) in children.enumerated() {
+            let isLastChild = index == children.count - 1
+            appendItemsRecursively(
+                child,
+                depth: 0,
+                parentTreeLines: [],
+                isLastInParent: isLastChild,
+                to: &newFlatList,
+                urlMap: &urlMap
+            )
+        }
+
+        flatList = newFlatList
+        itemByURL = urlMap
+    }
+
+    /// 재귀적으로 플랫 리스트에 항목 추가
+    private func appendItemsRecursively(
+        _ item: FileSystemItem,
+        depth: Int,
+        parentTreeLines: [Bool],
+        isLastInParent: Bool,
+        to list: inout [FlatFileItem],
+        urlMap: inout [URL: FileSystemItem]
+    ) {
+        // 현재 depth의 세로선 표시 여부: 마지막 자식이 아니면 세로선 유지
+        let currentTreeLines = parentTreeLines + [!isLastInParent]
+
+        let flatItem = FlatFileItem(
+            item: item,
+            depth: depth,
+            parentTreeLines: currentTreeLines
+        )
+        list.append(flatItem)
+        urlMap[item.url] = item
+
+        // 펼쳐진 폴더의 자식들 추가
+        if item.isDirectory && item.isExpanded, let children = item.children {
+            for (index, child) in children.enumerated() {
+                let isLast = index == children.count - 1
+                appendItemsRecursively(
+                    child,
+                    depth: depth + 1,
+                    parentTreeLines: currentTreeLines,
+                    isLastInParent: isLast,
+                    to: &list,
+                    urlMap: &urlMap
+                )
+            }
+        }
+    }
+
+    /// ID로 FileSystemItem 찾기
+    private func findItem(by id: UUID) -> FileSystemItem? {
+        flatList.first { $0.id == id }?.item
+    }
+
+    /// 선택된 항목 삭제 (Cmd+Backspace)
+    private func deleteSelectedItems() {
+        guard !selectedItemIds.isEmpty else { return }
+
+        let itemsToDelete = selectedItemIds.compactMap { findItem(by: $0) }
+        guard !itemsToDelete.isEmpty else { return }
+
+        if itemsToDelete.count == 1, let item = itemsToDelete.first {
+            fileSystemManager.showDeleteConfirmation(for: item) { deleted in
+                if deleted {
+                    selectedItemIds.removeAll()
+                    lastSelectedItemId = nil
+                    updateCache() // 삭제 후 캐시 갱신
+                    closeTabsForDeletedItems([item]) // 탭바 업데이트
+                }
+            }
+        } else {
+            fileSystemManager.showMultipleDeleteConfirmation(for: itemsToDelete) { deleted in
+                if deleted {
+                    selectedItemIds.removeAll()
+                    lastSelectedItemId = nil
+                    updateCache() // 삭제 후 캐시 갱신
+                    closeTabsForDeletedItems(itemsToDelete) // 탭바 업데이트
+                }
+            }
+        }
+    }
+
+    /// 삭제된 항목에 해당하는 탭 닫기
+    private func closeTabsForDeletedItems(_ items: [FileSystemItem]) {
+        for item in items {
+            if item.isDirectory {
+                // 폴더인 경우: 해당 폴더 하위의 모든 파일 탭 닫기
+                tabManager.closeTabsUnder(folderURL: item.url)
+            } else {
+                // 파일인 경우: 해당 파일 탭 닫기
+                if let tabIndex = tabManager.findTab(with: item.url) {
+                    tabManager.closeTab(at: tabIndex, force: true)
+                }
+            }
         }
     }
 
     // MARK: - Drag and Drop
 
-    /// 항목 이동 처리 (저장되지 않은 파일 확인 및 이름 충돌 처리 포함)
     private func handleMoveItem(_ sourceItem: FileSystemItem, to destinationFolder: FileSystemItem) {
-        // 1단계: 파일이 수정된 상태인지 확인
         if !sourceItem.isDirectory && tabManager.isModified(url: sourceItem.url) {
-            // 수정된 파일 이동 다이얼로그 표시
             fileSystemManager.showModifiedFileMoveDialog(fileName: sourceItem.name) { result in
                 switch result {
                 case .saveAndMove:
-                    // 현재 에디터 내용 가져와서 저장
                     if let content = getCurrentEditorContent?() {
                         if let tabIndex = tabManager.findTab(with: sourceItem.url) {
                             _ = tabManager.saveTab(at: tabIndex, content: content)
                         }
                     }
-                    // 저장 후 이름 충돌 확인하여 이동
                     self.checkNameConflictAndMove(sourceItem, to: destinationFolder)
-
                 case .cancel:
-                    // 취소 - 아무것도 하지 않음
                     break
                 }
             }
         } else {
-            // 수정되지 않은 상태이거나 폴더인 경우 이름 충돌 확인하여 이동
             checkNameConflictAndMove(sourceItem, to: destinationFolder)
         }
     }
 
-    /// 이름 충돌 확인 후 이동
     private func checkNameConflictAndMove(_ sourceItem: FileSystemItem, to destinationFolder: FileSystemItem) {
-        // 대상 폴더에 같은 이름의 파일이 있는지 확인
         if fileSystemManager.fileExists(named: sourceItem.name, in: destinationFolder) {
-            // 이름 충돌 다이얼로그 표시
             fileSystemManager.showNameConflictDialog(fileName: sourceItem.name) { result in
                 switch result {
                 case .rename(let newName):
-                    // 새 이름이 또 충돌하는지 확인
                     if fileSystemManager.fileExists(named: newName, in: destinationFolder) {
-                        // 재귀적으로 다시 충돌 다이얼로그 표시
                         self.checkNameConflictAndMove(sourceItem, to: destinationFolder)
                     } else {
-                        // 새 이름으로 이동
-                        _ = fileSystemManager.move(sourceItem, to: destinationFolder, withNewName: newName)
+                        if fileSystemManager.move(sourceItem, to: destinationFolder, withNewName: newName) {
+                            updateCache()
+                        }
                     }
-
                 case .cancel:
-                    // 취소 - 아무것도 하지 않음
                     break
                 }
             }
         } else {
-            // 충돌 없음 - 바로 이동
-            _ = fileSystemManager.move(sourceItem, to: destinationFolder)
+            if fileSystemManager.move(sourceItem, to: destinationFolder) {
+                updateCache()
+            }
         }
     }
 }
@@ -276,14 +491,12 @@ struct ProjectExplorerView: View {
 }
 
 #Preview("모의 데이터") {
-    // 모의 프로젝트 구조 생성
     let root = FileSystemItem(
         url: URL(fileURLWithPath: "/tmp/MyNovel.weaveproj"),
         isDirectory: true
     )
     root.isExpanded = true
 
-    // 섹션 폴더들
     let sections = [
         ("세계관", true, 3),
         ("캐릭터", true, 5),
@@ -300,7 +513,6 @@ struct ProjectExplorerView: View {
             isDirectory: isDir,
             parent: root
         )
-        // 자식 항목 생성 (개수 표시용)
         if childCount > 0 {
             item.children = (1...childCount).map { index in
                 FileSystemItem(
@@ -313,39 +525,8 @@ struct ProjectExplorerView: View {
         sectionItems.append(item)
     }
     root.children = sectionItems
-
-    // 첫 번째 폴더 펼치기
     sectionItems[0].isExpanded = true
 
-    return VStack(alignment: .leading, spacing: 0) {
-        // 헤더
-        HStack {
-            Text("MyNovel")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(AppColors.sidebarHeaderText)
-                .textCase(.uppercase)
-            Spacer()
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-
-        Divider()
-
-        // 파일 트리
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(sectionItems) { item in
-                    FileSystemItemRow(
-                        item: item,
-                        depth: 0,
-                        onSelect: { _ in },
-                        onDoubleClick: { _ in }
-                    )
-                }
-            }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 4)
-        }
-    }
-    .frame(width: 220, height: 400)
+    return ProjectExplorerView()
+        .frame(width: 220, height: 400)
 }

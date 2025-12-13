@@ -8,17 +8,18 @@
 import SwiftUI
 
 struct TabBarView: View {
-    private var tabManager: EditorTabManager { EditorTabManager.shared }
+    @State private var tabManager = EditorTabManager.shared
     private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
 
     @State private var isAddButtonHovered = false
     @State private var isAddButtonPressed = false
     @State private var draggingTabId: UUID?
     @State private var dragOverTabId: UUID?
+    @State private var isDragOverTrailingArea = false
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
+            HStack(spacing: 4) {
                 ForEach(Array(tabManager.tabs.enumerated()), id: \.element.id) { index, tab in
                     TabItemView(
                         title: tab.title,
@@ -65,7 +66,24 @@ struct TabBarView: View {
                 .padding(.leading, 4)
                 .help(L10n.tabs.newTab)
 
+                // 마지막 위치로 탭 이동을 위한 드롭 영역
                 Spacer()
+                    .frame(minWidth: 40)
+                    .contentShape(Rectangle())
+                    .onDrop(of: [.text], delegate: TrailingDropDelegate(
+                        tabManager: tabManager,
+                        draggingTabId: $draggingTabId,
+                        dragOverTabId: $dragOverTabId,
+                        isDragOverTrailingArea: $isDragOverTrailingArea
+                    ))
+                    .overlay(alignment: .leading) {
+                        if isDragOverTrailingArea {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.accentColor)
+                                .frame(width: 3, height: 20)
+                                .shadow(color: Color.accentColor.opacity(0.6), radius: 4)
+                        }
+                    }
             }
             .padding(.horizontal, 8)
         }
@@ -74,11 +92,6 @@ struct TabBarView: View {
             if tabManager.tabs.isEmpty {
                 Divider()
             }
-        }
-        .onChange(of: tabManager.tabs) { _, _ in
-            // 탭 목록이 변경되면 드래그 상태 초기화
-            draggingTabId = nil
-            dragOverTabId = nil
         }
     }
 
@@ -95,7 +108,12 @@ struct TabBarView: View {
 
     private func showNewFileDialog() {
         guard let targetDirectory = fileSystemManager.targetDirectoryForNewFile else { return }
-        fileSystemManager.showNewFileDialog(in: targetDirectory) { _ in }
+        fileSystemManager.showNewFileDialog(in: targetDirectory) { newFileItem in
+            // 새 파일이 생성되면 탭으로 열기
+            if let fileItem = newFileItem {
+                tabManager.openFile(fileItem)
+            }
+        }
     }
 }
 
@@ -120,16 +138,16 @@ struct TabItemView: View {
         if isHovering {
             return AppColors.tabHoverBackground
         } else {
-            return AppColors.tabSelectedBackground // 기본 배경을 기존 선택 배경으로
+            return AppColors.tabInactiveBackground
         }
     }
 
     /// 탭 테두리 색상
     private var tabBorderColor: Color {
         if isSelected {
-            return AppColors.tabSelectedBorder
+            return AppColors.tabActiveBorder
         } else {
-            return AppColors.tabDefaultBorder
+            return AppColors.tabInactiveBorder
         }
     }
 
@@ -195,16 +213,20 @@ struct TabItemView: View {
         )
         .glassEffect(isSelected ? .regular : .clear, in: .capsule)
         .contentShape(Capsule())
-        .opacity(isDragging ? 0.5 : 1.0)
+        // 드래그 중 시각적 피드백
+        .opacity(isDragging ? 0.4 : 1.0)
+        .scaleEffect(isDragging ? 0.95 : 1.0)
+        // 드롭 위치 표시 인디케이터 (글로우 효과)
         .overlay(alignment: .leading) {
-            // 드롭 위치 표시 인디케이터
             if isDragOver {
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: 2)
-                    .offset(x: -1)
+                Capsule()
+                    .stroke(Color.accentColor, lineWidth: 2)
+                    .shadow(color: Color.accentColor.opacity(0.6), radius: 4)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
+        .animation(.easeOut(duration: 0.15), value: isDragging)
+        .animation(.easeOut(duration: 0.15), value: isDragOver)
         .onTapGesture(perform: onSelect)
         .onHover { hovering in
             isHovering = hovering
@@ -235,13 +257,16 @@ struct TabDropDelegate: DropDelegate {
     @Binding var dragOverTabId: UUID?
 
     func dropEntered(info: DropInfo) {
-        // 드래그 중인 탭이 자기 자신이면 무시
         guard draggingTabId != tabId else { return }
-        dragOverTabId = tabId
+        withAnimation(.easeOut(duration: 0.15)) {
+            dragOverTabId = tabId
+        }
     }
 
     func dropExited(info: DropInfo) {
-        dragOverTabId = nil
+        withAnimation(.easeOut(duration: 0.15)) {
+            dragOverTabId = nil
+        }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -252,14 +277,14 @@ struct TabDropDelegate: DropDelegate {
         guard let draggingId = draggingTabId else { return false }
         guard let sourceIndex = tabManager.tabs.firstIndex(where: { $0.id == draggingId }) else { return false }
 
-        // 드롭 위치 계산
         let destinationIndex = tabIndex
 
+        // 탭 이동 즉시 처리 (애니메이션은 TabBarView의 .animation 모디파이어에서 처리)
         if sourceIndex != destinationIndex {
             tabManager.moveTab(from: sourceIndex, to: destinationIndex)
         }
 
-        // 상태 초기화
+        // 드래그 상태 초기화
         draggingTabId = nil
         dragOverTabId = nil
 
@@ -268,6 +293,56 @@ struct TabDropDelegate: DropDelegate {
 
     func validateDrop(info: DropInfo) -> Bool {
         return draggingTabId != nil && draggingTabId != tabId
+    }
+}
+
+// MARK: - Trailing Drop Delegate (마지막 위치로 탭 이동)
+
+struct TrailingDropDelegate: DropDelegate {
+    let tabManager: EditorTabManager
+    @Binding var draggingTabId: UUID?
+    @Binding var dragOverTabId: UUID?
+    @Binding var isDragOverTrailingArea: Bool
+
+    func dropEntered(info: DropInfo) {
+        guard draggingTabId != nil else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+            isDragOverTrailingArea = true
+            dragOverTabId = nil
+        }
+    }
+
+    func dropExited(info: DropInfo) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            isDragOverTrailingArea = false
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let draggingId = draggingTabId else { return false }
+        guard let sourceIndex = tabManager.tabs.firstIndex(where: { $0.id == draggingId }) else { return false }
+
+        let lastIndex = tabManager.tabs.count - 1
+
+        // 이미 마지막이 아니면 마지막으로 이동
+        if sourceIndex != lastIndex {
+            tabManager.moveTab(from: sourceIndex, to: lastIndex)
+        }
+
+        // 드래그 상태 초기화
+        draggingTabId = nil
+        dragOverTabId = nil
+        isDragOverTrailingArea = false
+
+        return true
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        return draggingTabId != nil
     }
 }
 

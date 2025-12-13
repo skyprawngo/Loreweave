@@ -71,6 +71,7 @@ struct GeneralSettingsView: View {
     @State private var selectedLanguage = LocalizationManager.shared.currentLanguage
     @State private var launchBehavior = UserSettings.shared.appLaunchBehavior
     @State private var appTheme = UserSettings.shared.appTheme
+    @State private var appFontName = UserSettings.shared.appFontName
     @State private var permissionManager = PermissionManager.shared
     @State private var projectManager = ProjectManager.shared
 
@@ -82,6 +83,11 @@ struct GeneralSettingsView: View {
     /// 저장된 테마가 현재 적용된 테마와 다른지 확인
     private var themeWillChangeOnRestart: Bool {
         appTheme != ThemeManager.shared.appliedTheme
+    }
+
+    /// 표시용 앱 폰트 이름
+    private var displayAppFontName: String {
+        appFontName.isEmpty ? L10n.get("settings.font.system") : appFontName
     }
 
     var body: some View {
@@ -137,6 +143,31 @@ struct GeneralSettingsView: View {
                     }
                 } message: {
                     Text(L10n.get("settings.theme.changeMessage"))
+                }
+
+                // 앱 전역 폰트 설정
+                HStack {
+                    Text(L10n.get("settings.font.appFont"))
+
+                    Spacer()
+
+                    Button {
+                        showAppFontPanel()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(displayAppFontName)
+                                .lineLimit(1)
+                                .frame(maxWidth: 120)
+
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AppColors.controlBackground)
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 // 시작 동작 설정
@@ -210,6 +241,50 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
     }
+
+    /// 앱 전역 폰트 선택 패널 표시
+    private func showAppFontPanel() {
+        let fontPanel = NSFontPanel.shared
+        let fontManager = NSFontManager.shared
+
+        // 현재 폰트 설정
+        let currentFont: NSFont
+        if appFontName.isEmpty {
+            currentFont = NSFont.systemFont(ofSize: 13)
+        } else {
+            currentFont = NSFont(name: appFontName, size: 13) ?? NSFont.systemFont(ofSize: 13)
+        }
+
+        fontManager.setSelectedFont(currentFont, isMultiple: false)
+        fontManager.target = AppFontPanelDelegate.shared
+        fontManager.action = #selector(AppFontPanelDelegate.changeFont(_:))
+
+        // 폰트 변경 콜백 설정
+        AppFontPanelDelegate.shared.onFontChange = { [self] newFont in
+            appFontName = newFont.fontName
+            UserSettings.shared.appFontName = newFont.fontName
+        }
+
+        fontPanel.orderFront(nil)
+    }
+}
+
+// MARK: - App Font Panel Delegate
+
+/// 앱 전역 폰트 선택용 NSFontPanel 델리게이트
+private class AppFontPanelDelegate: NSObject {
+    static let shared = AppFontPanelDelegate()
+
+    var onFontChange: ((NSFont) -> Void)?
+
+    @objc func changeFont(_ sender: NSFontManager?) {
+        guard let fontManager = sender else { return }
+
+        let currentFont = fontManager.selectedFont ?? NSFont.systemFont(ofSize: 13)
+        let newFont = fontManager.convert(currentFont)
+
+        onFontChange?(newFont)
+    }
 }
 
 // MARK: - AI Settings
@@ -246,9 +321,9 @@ struct AISettingsView: View {
 // MARK: - Editor Settings
 
 struct EditorSettingsView: View {
-    @State private var fontSize: Double = 16
-    @State private var lineSpacing: Double = 8
-    @State private var autoSave: Bool = true
+    @State private var fontSize: Double = Double(UserSettings.shared.editorFontSize)
+    @State private var lineSpacing: Double = Double(UserSettings.shared.editorLineSpacing)
+    @State private var autoSaveOption: AutoSaveOption = UserSettings.shared.autoSaveOption
 
     var body: some View {
         Form {
@@ -262,17 +337,30 @@ struct EditorSettingsView: View {
                         .foregroundStyle(AppColors.textSecondary)
                         .frame(width: 40, alignment: .trailing)
                 }
+                .onChange(of: fontSize) { _, newValue in
+                    UserSettings.shared.editorFontSize = CGFloat(newValue)
+                }
 
                 HStack {
                     Text(L10n.editor.lineSpacing)
-                    Slider(value: $lineSpacing, in: 4...16, step: 2)
+                    Slider(value: $lineSpacing, in: 1.0...2.0, step: 0.25)
                         .frame(width: 150)
-                    Text("\(Int(lineSpacing))pt")
+                    Text("\(Int(lineSpacing * 100))%")
                         .foregroundStyle(AppColors.textSecondary)
                         .frame(width: 40, alignment: .trailing)
                 }
+                .onChange(of: lineSpacing) { _, newValue in
+                    UserSettings.shared.editorLineSpacing = CGFloat(newValue)
+                }
 
-                Toggle(L10n.get("settings.autoSave"), isOn: $autoSave)
+                Picker(L10n.get("settings.autoSave"), selection: $autoSaveOption) {
+                    ForEach(AutoSaveOption.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .onChange(of: autoSaveOption) { _, newValue in
+                    UserSettings.shared.autoSaveOption = newValue
+                }
             }
         }
         .formStyle(.grouped)
@@ -448,7 +536,7 @@ struct ShortcutsSettingsView: View {
             if showShortcutColumn {
                 TableColumn(L10n.get("settings.shortcuts.shortcut")) { binding in
                     HStack {
-                        if binding.isEnabled || binding.action.isSystemDefault {
+                        if binding.isEnabled {
                             Text(binding.displayString)
                                 .font(.system(.body, design: .monospaced))
                                 .padding(.horizontal, 6)
@@ -462,17 +550,14 @@ struct ShortcutsSettingsView: View {
 
                         Spacer()
 
-                        // 편집 버튼 (시스템 기본 아닌 경우에만)
-                        if !binding.action.isSystemDefault {
-                            Button {
-                                editingBinding = binding
-                            } label: {
-                                Image(systemName: "pencil")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(AppColors.toolbarIcon)
+                        Button {
+                            editingBinding = binding
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.caption)
                         }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(AppColors.toolbarIcon)
                     }
                 }
                 .width(min: 100, ideal: 160, max: 250)
@@ -481,21 +566,14 @@ struct ShortcutsSettingsView: View {
             // 활성화 토글 열
             if showToggleColumn {
                 TableColumn(L10n.get("settings.shortcuts.toggle")) { binding in
-                    if binding.action.isSystemDefault {
-                        // 시스템 기본 기능 표시
-                        Text(L10n.get("settings.shortcuts.systemDefault"))
-                            .font(.caption)
-                            .foregroundStyle(AppColors.textSecondary)
-                    } else {
-                        Toggle("", isOn: Binding(
-                            get: { binding.isEnabled },
-                            set: { _ in
-                                shortcutManager.toggleEnabled(for: binding.action)
-                            }
-                        ))
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                    }
+                    Toggle("", isOn: Binding(
+                        get: { binding.isEnabled },
+                        set: { _ in
+                            shortcutManager.toggleEnabled(for: binding.action)
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
                 }
                 .width(min: 70, ideal: 90, max: 130)
             }

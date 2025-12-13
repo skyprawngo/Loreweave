@@ -2,7 +2,7 @@
 //  FileSystemItemRow.swift
 //  Loreweave
 //
-//  파일 시스템 항목 행 뷰 (트리 구조 표시용)
+//  파일 시스템 항목 단일 행 뷰 (재귀 없음)
 //
 
 import SwiftUI
@@ -10,15 +10,24 @@ import SwiftUI
 struct FileSystemItemRow: View {
     @Bindable var item: FileSystemItem
     let depth: Int
-    let onSelect: (FileSystemItem) -> Void
-    let onDoubleClick: (FileSystemItem) -> Void
+    /// 선택 콜백 (항목, 수정자 키)
+    let onSelect: (FileSystemItem, EventModifiers) -> Void
     var onMoveItem: ((FileSystemItem, FileSystemItem) -> Void)?
-    /// 선택된 항목인지 여부 (부모에서 전달)
-    var isSelected: Bool = false
-    /// 현재 선택된 항목 ID (자식 뷰로 전달용)
-    var selectedItemId: UUID?
-    /// 부모 폴더들의 세로선 표시 여부 배열 (depth별로 세로선 표시 여부)
+    /// 캐시 갱신 콜백 (펼침/접기, 파일 생성/삭제/이름 변경 등 모든 변경 시)
+    var onCacheUpdate: (() -> Void)?
+    /// 삭제 후 콜백 (삭제된 항목 전달)
+    var onItemDeleted: ((FileSystemItem) -> Void)?
+    /// 선택 상태 체크 클로저
+    var isItemSelected: ((UUID) -> Bool)?
+    /// URL로 항목 찾기 클로저
+    var findItemByURL: ((URL) -> FileSystemItem?)?
+    /// 부모 폴더들의 세로선 표시 여부 배열
     var parentTreeLines: [Bool] = []
+
+    /// 현재 항목이 선택되었는지 여부
+    private var isSelected: Bool {
+        isItemSelected?(item.id) ?? false
+    }
 
     @State private var isHovered: Bool = false
     @State private var isEditing: Bool = false
@@ -28,7 +37,6 @@ struct FileSystemItemRow: View {
     @FocusState private var isRowFocused: Bool
 
     private let fileSystemManager = FileSystemManager.shared
-    private let tabManager = EditorTabManager.shared
 
     /// 행 배경색 (파인더 스타일)
     private var rowBackgroundColor: Color {
@@ -64,36 +72,9 @@ struct FileSystemItemRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // 현재 항목 행
-            rowContent
-
-            // 자식 항목 (펼쳐진 경우에만 렌더링 - lazy loading)
-            if item.isDirectory && item.isExpanded {
-                childrenContent
-            }
-        }
-        .animation(.easeOut(duration: 0.15), value: item.isExpanded)
-    }
-
-    // MARK: - Row Content
-
-    private var rowContent: some View {
         HStack(spacing: 4) {
             // 들여쓰기 + 세로선
-            HStack(spacing: 0) {
-                ForEach(0..<depth, id: \.self) { index in
-                    ZStack {
-                        // 부모 폴더의 세로선 (해당 depth에 세로선이 필요한 경우)
-                        if index < parentTreeLines.count && parentTreeLines[index] {
-                            Rectangle()
-                                .fill(AppColors.separator)
-                                .frame(width: 1)
-                        }
-                    }
-                    .frame(width: 16)
-                }
-            }
+            treeIndentation
 
             // 폴더 펼침/접기 버튼 또는 공간
             if item.isDirectory {
@@ -142,27 +123,21 @@ struct FileSystemItemRow: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .onTapGesture(count: 2) {
-            if item.isDirectory {
-                toggleExpand()
-            } else {
-                onDoubleClick(item)
-            }
-        }
-        .onTapGesture(count: 1) {
-            onSelect(item)
-            if item.isDirectory {
+        .onTapGesture {
+            let modifiers = currentEventModifiers()
+            onSelect(item, modifiers)
+            // Shift/Command 없이 폴더 클릭 시에만 펼치기/접기
+            if item.isDirectory && !modifiers.contains(.shift) && !modifiers.contains(.command) {
                 toggleExpand()
             }
-            // 선택 시 즉시 포커스 부여
+            // 선택 시 포커스 부여
             if !isEditing {
                 isRowFocused = true
             }
         }
         .contextMenu { contextMenuContent }
-        // 선택된 상태에서 Enter 키로 이름 편집 시작
         .focusable(!isEditing)
-        .focusEffectDisabled()  // 기본 포커스 외형선 비활성화
+        .focusEffectDisabled()
         .focused($isRowFocused)
         .onKeyPress(.return) {
             if isSelected && !isEditing {
@@ -172,14 +147,12 @@ struct FileSystemItemRow: View {
             return .ignored
         }
         .onChange(of: isSelected) { _, newValue in
-            // 선택 해제 시 포커스도 해제
             if !newValue {
                 isRowFocused = false
             }
         }
         // 드래그 소스
         .draggable(item.url.absoluteString) {
-            // 드래그 중 표시할 미리보기
             HStack(spacing: 4) {
                 Image(systemName: item.iconName)
                     .font(.system(size: 13))
@@ -205,15 +178,30 @@ struct FileSystemItemRow: View {
                 return false
             }
 
-            // 드래그된 항목 찾기
-            if let sourceItem = findItem(by: sourceURL) {
+            if let sourceItem = findItemByURL?(sourceURL) {
                 onMoveItem?(sourceItem, item)
             }
             return true
         } isTargeted: { targeted in
-            // 폴더에만 드롭 타겟 표시
             if item.isDirectory {
                 isDropTargeted = targeted
+            }
+        }
+    }
+
+    // MARK: - Tree Indentation
+
+    private var treeIndentation: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<depth, id: \.self) { index in
+                ZStack {
+                    if index < parentTreeLines.count && parentTreeLines[index] {
+                        Rectangle()
+                            .fill(AppColors.separator)
+                            .frame(width: 1)
+                    }
+                }
+                .frame(width: 16)
             }
         }
     }
@@ -245,52 +233,6 @@ struct FileSystemItemRow: View {
         )
         .font(.system(size: 12))
         .focused($isTextFieldFocused)
-    }
-
-    // MARK: - Children Content (Lazy)
-
-    @ViewBuilder
-    private var childrenContent: some View {
-        if let children = item.children, !children.isEmpty {
-            ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
-                let isLastChild = index == children.count - 1
-                // 현재 depth에서 세로선을 그릴지 여부 (마지막 자식이 아니면 세로선 유지)
-                let newTreeLines = parentTreeLines + [!isLastChild]
-
-                FileSystemItemRow(
-                    item: child,
-                    depth: depth + 1,
-                    onSelect: onSelect,
-                    onDoubleClick: onDoubleClick,
-                    onMoveItem: onMoveItem,
-                    isSelected: selectedItemId == child.id,
-                    selectedItemId: selectedItemId,
-                    parentTreeLines: newTreeLines
-                )
-            }
-        }
-    }
-
-    // MARK: - Find Item Helper
-
-    /// URL로 FileSystemItem 찾기 (프로젝트 루트에서 재귀 탐색)
-    private func findItem(by url: URL) -> FileSystemItem? {
-        guard let root = fileSystemManager.projectRoot else { return nil }
-        return findItemRecursively(in: root, url: url)
-    }
-
-    private func findItemRecursively(in item: FileSystemItem, url: URL) -> FileSystemItem? {
-        if item.url == url {
-            return item
-        }
-        if let children = item.children {
-            for child in children {
-                if let found = findItemRecursively(in: child, url: url) {
-                    return found
-                }
-            }
-        }
-        return nil
     }
 
     // MARK: - Context Menu
@@ -336,12 +278,12 @@ struct FileSystemItemRow: View {
 
     private func toggleExpand() {
         fileSystemManager.toggleExpand(item)
+        onCacheUpdate?()
     }
 
     private func startEditing() {
         editingName = item.name
         isEditing = true
-        // 약간의 지연 후 포커스 설정
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             isTextFieldFocused = true
         }
@@ -350,7 +292,9 @@ struct FileSystemItemRow: View {
     private func finishEditing() {
         let newName = editingName.trimmingCharacters(in: .whitespaces)
         if !newName.isEmpty && newName != item.name {
-            _ = fileSystemManager.rename(item, to: newName)
+            if fileSystemManager.rename(item, to: newName) {
+                onCacheUpdate?()
+            }
         }
         isEditing = false
     }
@@ -360,15 +304,29 @@ struct FileSystemItemRow: View {
     }
 
     private func showNewFileDialog() {
-        fileSystemManager.showNewFileDialog(in: item) { _ in }
+        fileSystemManager.showNewFileDialog(in: item) { [self] newItem in
+            if newItem != nil {
+                onCacheUpdate?()
+            }
+        }
     }
 
     private func showNewFolderDialog() {
-        fileSystemManager.showNewFolderDialog(in: item) { _ in }
+        fileSystemManager.showNewFolderDialog(in: item) { [self] newItem in
+            if newItem != nil {
+                onCacheUpdate?()
+            }
+        }
     }
 
     private func showDeleteConfirmation() {
-        fileSystemManager.showDeleteConfirmation(for: item) { _ in }
+        let itemToDelete = item  // 캡처용 복사
+        fileSystemManager.showDeleteConfirmation(for: item) { deleted in
+            if deleted {
+                onCacheUpdate?()
+                onItemDeleted?(itemToDelete)
+            }
+        }
     }
 
     private func revealInFinder() {
@@ -378,6 +336,17 @@ struct FileSystemItemRow: View {
     private func openWithDefaultApp() {
         fileSystemManager.openWithDefaultApp(item)
     }
+
+    /// 현재 NSEvent에서 수정자 키 상태를 SwiftUI EventModifiers로 변환
+    private func currentEventModifiers() -> EventModifiers {
+        let flags = NSEvent.modifierFlags
+        var modifiers: EventModifiers = []
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.control) { modifiers.insert(.control) }
+        return modifiers
+    }
 }
 
 #Preview {
@@ -385,24 +354,11 @@ struct FileSystemItemRow: View {
         url: URL(fileURLWithPath: "/tmp/Test"),
         isDirectory: true
     )
-    let child1 = FileSystemItem(
-        url: URL(fileURLWithPath: "/tmp/Test/chapter1.md"),
-        isDirectory: false,
-        parent: root
-    )
-    let child2 = FileSystemItem(
-        url: URL(fileURLWithPath: "/tmp/Test/Subfolder"),
-        isDirectory: true,
-        parent: root
-    )
-    root.children = [child1, child2]
-    root.isExpanded = true
 
     return FileSystemItemRow(
         item: root,
         depth: 0,
-        onSelect: { _ in },
-        onDoubleClick: { _ in }
+        onSelect: { _, _ in }
     )
     .frame(width: 220)
     .padding()

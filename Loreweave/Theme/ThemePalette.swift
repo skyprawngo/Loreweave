@@ -49,20 +49,20 @@ protocol ThemePalette {
 
     // MARK: - Tab Bar
 
-    /// 탭 배경색 (선택됨)
-    static var tabSelectedBackground: Color { get }
+    /// 탭 배경색 (비활성 - glassEffect 미적용 탭용)
+    static var tabInactiveBackground: Color { get }
 
     /// 탭 배경색 (호버)
     static var tabHoverBackground: Color { get }
 
-    /// 탭 배경색 (기본)
+    /// 탭 배경색 (기본 - 투명)
     static var tabDefaultBackground: Color { get }
 
-    /// 탭 테두리색 (선택됨)
-    static var tabSelectedBorder: Color { get }
+    /// 탭 테두리색 (활성)
+    static var tabActiveBorder: Color { get }
 
-    /// 탭 테두리색 (기본)
-    static var tabDefaultBorder: Color { get }
+    /// 탭 테두리색 (비활성)
+    static var tabInactiveBorder: Color { get }
 
     /// 탭 텍스트색
     static var tabText: Color { get }
@@ -193,4 +193,13 @@ protocol ThemePaletteNSColor {
 
     /// 에디터 배경색
     static var nsEditorBackground: NSColor { get }
+
+    /// 텍스트 에디터 배경색
+    static var nsTextEditorBackground: NSColor { get }
+
+    /// 현재 줄 하이라이트 배경색
+    static var nsCurrentLineHighlight: NSColor { get }
+
+    /// 에디터 커서 색상
+    static var nsEditorCursor: NSColor { get }
 }

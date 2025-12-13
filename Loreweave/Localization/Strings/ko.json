@@ -30,6 +30,10 @@
   "editor.alignCenter": "가운데 정렬",
   "editor.alignRight": "오른쪽 정렬",
   "editor.alignJustified": "양쪽 정렬",
+  "editor.lineSpacing.none": "없음",
+  "editor.lineSpacing.small": "좁게",
+  "editor.lineSpacing.medium": "보통",
+  "editor.lineSpacing.large": "넓게",
 
   "findReplace.find": "찾기",
   "findReplace.replace": "바꾸기",
@@ -79,6 +83,11 @@
   "tabs.close": "닫기",
   "tabs.newTab": "새 탭",
 
+  "app.quit.saveChangesTitle": "변경사항 저장",
+  "app.quit.saveChangesMessage": "'%@'에 저장되지 않은 변경사항이 있습니다. 닫기 전에 저장하시겠습니까?",
+  "app.quit.dontSave": "저장 안 함",
+  "app.quit.save": "저장",
+
   "common.cancel": "취소",
   "common.confirm": "확인",
   "common.delete": "삭제",
@@ -95,6 +104,10 @@
   "settings.language": "언어",
   "settings.aiProvider": "AI 제공자",
   "settings.autoSave": "자동 저장",
+  "settings.autoSave.disabled": "없음",
+  "settings.autoSave.everyFiveMinutes": "5분마다",
+  "settings.autoSave.everyTenMinutes": "10분마다",
+  "settings.autoSave.onTabChange": "탭 변경 시",
   "settings.theme": "테마",
   "settings.theme.system": "시스템 설정",
   "settings.theme.light": "라이트",
@@ -104,6 +117,8 @@
   "settings.theme.changeTitle": "테마 변경",
   "settings.theme.changeMessage": "테마 변경을 적용하려면 앱을 재시작해야 합니다.",
   "settings.theme.quit": "종료",
+  "settings.font.appFont": "앱 폰트",
+  "settings.font.system": "시스템",
   "settings.language.system": "시스템 언어",
   "settings.ai.local": "로컬 AI",
   "settings.editor": "에디터",
@@ -188,6 +203,7 @@
   "explorer.newFolderDefault": "새 폴더",
   "explorer.deleteConfirmTitle": "삭제 확인",
   "explorer.deleteConfirmMessage": "'%@'을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+  "explorer.deleteMultipleConfirmMessage": "%d개 항목을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
   "explorer.noProject": "프로젝트가 열려있지 않습니다",
   "explorer.modifiedFileMoveTitle": "파일 이동 불가",
   "explorer.modifiedFileMoveMessage": "파일이 수정 상태에 있어 파일을 이동할 수 없습니다. 파일을 저장하고 이동하시겠습니까?",
@@ -246,6 +262,12 @@
   "shortcut.edit.selectAll": "전체 선택",
   "shortcut.edit.find": "찾기",
   "shortcut.edit.findAndReplace": "찾기 및 바꾸기",
+  "shortcut.edit.moveLineUp": "행 위로 이동",
+  "shortcut.edit.moveLineDown": "행 아래로 이동",
+  "shortcut.edit.duplicateLineUp": "행 위로 복제",
+  "shortcut.edit.duplicateLineDown": "행 아래로 복제",
+  "shortcut.edit.deleteWordBackward": "단어 삭제",
+  "shortcut.edit.deleteToLineStart": "행 시작까지 삭제",
 
   "shortcut.view.toggleSidebar": "사이드바 토글",
   "shortcut.view.toggleAIPanel": "AI 패널 토글",
@@ -271,5 +293,12 @@
 
   "shortcut.project.open": "프로젝트 열기",
   "shortcut.project.new": "새 프로젝트",
-  "shortcut.project.refresh": "프로젝트 새로고침"
+  "shortcut.project.refresh": "프로젝트 새로고침",
+
+  "toolbar.goBack": "뒤로 가기",
+  "toolbar.goForward": "앞으로 가기",
+  "toolbar.searchPlaceholder": "검색...",
+
+  "spotlight.quickActions": "빠른 작업",
+  "spotlight.noResults": "검색 결과 없음"
 }

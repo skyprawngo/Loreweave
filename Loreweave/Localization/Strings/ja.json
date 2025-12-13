@@ -30,6 +30,10 @@
   "editor.alignCenter": "中央揃え",
   "editor.alignRight": "右揃え",
   "editor.alignJustified": "両端揃え",
+  "editor.lineSpacing.none": "なし",
+  "editor.lineSpacing.small": "狭い",
+  "editor.lineSpacing.medium": "標準",
+  "editor.lineSpacing.large": "広い",
 
   "findReplace.find": "検索",
   "findReplace.replace": "置換",
@@ -79,6 +83,11 @@
   "tabs.close": "閉じる",
   "tabs.newTab": "新しいタブ",
 
+  "app.quit.saveChangesTitle": "変更を保存しますか？",
+  "app.quit.saveChangesMessage": "'%@'に未保存の変更があります。閉じる前に保存しますか？",
+  "app.quit.dontSave": "保存しない",
+  "app.quit.save": "保存",
+
   "common.cancel": "キャンセル",
   "common.confirm": "確認",
   "common.delete": "削除",
@@ -94,6 +103,10 @@
   "settings.language": "言語",
   "settings.aiProvider": "AIプロバイダー",
   "settings.autoSave": "自動保存",
+  "settings.autoSave.disabled": "なし",
+  "settings.autoSave.everyFiveMinutes": "5分ごと",
+  "settings.autoSave.everyTenMinutes": "10分ごと",
+  "settings.autoSave.onTabChange": "タブ変更時",
   "settings.theme": "テーマ",
   "settings.theme.system": "システム設定",
   "settings.theme.light": "ライト",
@@ -103,6 +116,8 @@
   "settings.theme.changeTitle": "テーマ変更",
   "settings.theme.changeMessage": "テーマを変更を適用するにはアプリを再起動する必要があります。",
   "settings.theme.quit": "終了",
+  "settings.font.appFont": "アプリフォント",
+  "settings.font.system": "システム",
   "settings.language.system": "システム言語",
   "settings.ai.local": "ローカルAI",
   "settings.editor": "エディター",
@@ -184,6 +199,7 @@
   "explorer.newFolderDefault": "新規フォルダ",
   "explorer.deleteConfirmTitle": "削除の確認",
   "explorer.deleteConfirmMessage": "'%@'を削除してもよろしいですか？この操作は取り消せません。",
+  "explorer.deleteMultipleConfirmMessage": "%d個の項目を削除してもよろしいですか？この操作は取り消せません。",
   "explorer.noProject": "プロジェクトが開かれていません",
   "explorer.modifiedFileMoveTitle": "ファイルを移動できません",
   "explorer.modifiedFileMoveMessage": "ファイルに未保存の変更があるため、移動できません。保存して移動しますか？",
@@ -238,6 +254,12 @@
   "shortcut.edit.selectAll": "すべて選択",
   "shortcut.edit.find": "検索",
   "shortcut.edit.findAndReplace": "検索と置換",
+  "shortcut.edit.moveLineUp": "行を上に移動",
+  "shortcut.edit.moveLineDown": "行を下に移動",
+  "shortcut.edit.duplicateLineUp": "行を上に複製",
+  "shortcut.edit.duplicateLineDown": "行を下に複製",
+  "shortcut.edit.deleteWordBackward": "単語を削除",
+  "shortcut.edit.deleteToLineStart": "行頭まで削除",
 
   "shortcut.view.toggleSidebar": "サイドバー切替",
   "shortcut.view.toggleAIPanel": "AIパネル切替",
@@ -267,5 +289,8 @@
 
   "toolbar.goBack": "戻る",
   "toolbar.goForward": "進む",
-  "toolbar.searchPlaceholder": "検索..."
+  "toolbar.searchPlaceholder": "検索...",
+
+  "spotlight.quickActions": "クイックアクション",
+  "spotlight.noResults": "検索結果がありません"
 }

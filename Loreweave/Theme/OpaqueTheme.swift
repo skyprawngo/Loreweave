@@ -60,11 +60,11 @@ enum OpaqueTheme: ThemePalette, ThemePaletteNSColor {
 
     // MARK: - Tab Bar
 
-    static var tabSelectedBackground: Color { bgLight }
+    static var tabInactiveBackground: Color { bgLight }
     static var tabHoverBackground: Color { bgLight.opacity(0.5) }
     static var tabDefaultBackground: Color { Color.clear }
-    static var tabSelectedBorder: Color { borderLightColor }
-    static var tabDefaultBorder: Color { borderColor.opacity(0.3) }
+    static var tabActiveBorder: Color { borderLightColor }
+    static var tabInactiveBorder: Color { borderColor.opacity(0.3) }
     static var tabText: Color { textWhite }
     static var tabCloseHoverBackground: Color { textDimmed.opacity(0.3) }
     static var tabSelectedShadow: Color { Color.black.opacity(0.4) }
@@ -133,5 +133,17 @@ enum OpaqueTheme: ThemePalette, ThemePaletteNSColor {
 
     static var nsEditorBackground: NSColor {
         NSColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0)
+    }
+
+    static var nsTextEditorBackground: NSColor {
+        NSColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0)
+    }
+
+    static var nsCurrentLineHighlight: NSColor {
+        NSColor(red: 0.20, green: 0.20, blue: 0.24, alpha: 0.5)
+    }
+
+    static var nsEditorCursor: NSColor {
+        NSColor(red: 0.93, green: 0.93, blue: 0.95, alpha: 1.0)
     }
 }

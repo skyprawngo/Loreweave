@@ -84,18 +84,22 @@ final class FileSystemManager {
 
         do {
             let contents = try FileManager.default.contentsOfDirectory(
-                at: item.url,
+                at: item.url.standardizedFileURL,
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )
 
             var newChildren: [FileSystemItem] = []
             let existingChildren = item.children ?? []
-            let existingURLs = Dictionary(uniqueKeysWithValues: existingChildren.map { ($0.url, $0) })
+            // URL 비교 시 standardizedFileURL.path 사용 (유니코드 정규화 문제 해결)
+            let existingByPath = Dictionary(uniqueKeysWithValues: existingChildren.map {
+                ($0.url.standardizedFileURL.path, $0)
+            })
 
             for url in contents {
+                let standardizedPath = url.standardizedFileURL.path
                 // 기존 항목이 있으면 재사용 (상태 유지)
-                if let existing = existingURLs[url] {
+                if let existing = existingByPath[standardizedPath] {
                     newChildren.append(existing)
                 } else {
                     // 새 항목만 생성
@@ -345,8 +349,22 @@ final class FileSystemManager {
     /// 항목 삭제
     @discardableResult
     func delete(_ item: FileSystemItem) -> Bool {
+        // macOS 파일 시스템의 유니코드 정규화 (NFD) 문제 해결
+        // item.url이 실제 파일 시스템의 URL과 다를 수 있으므로 standardizedFileURL 사용
+        let fileURL = item.url.standardizedFileURL
+
+        // 파일이 실제로 존재하는지 확인
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("File does not exist at path: \(fileURL.path)")
+            // 부모의 children에서 제거 (UI 정리)
+            if let parent = item.parent {
+                parent.children?.removeAll { $0.id == item.id }
+            }
+            return true // 이미 없으므로 성공으로 처리
+        }
+
         do {
-            try FileManager.default.removeItem(at: item.url)
+            try FileManager.default.removeItem(at: fileURL)
 
             // 부모의 children에서 제거
             if let parent = item.parent {
@@ -379,6 +397,37 @@ final class FileSystemManager {
             if response == .alertFirstButtonReturn {
                 let success = self.delete(item)
                 completion(success)
+            } else {
+                completion(false)
+            }
+        }
+    }
+
+    /// 다중 항목 삭제 확인 다이얼로그 표시
+    func showMultipleDeleteConfirmation(for items: [FileSystemItem], completion: @escaping (Bool) -> Void) {
+        guard let window = NSApp.keyWindow else {
+            completion(false)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L10n.get("explorer.deleteConfirmTitle")
+        alert.informativeText = String(format: L10n.get("explorer.deleteMultipleConfirmMessage"), items.count)
+        alert.addButton(withTitle: L10n.common.delete)
+        alert.addButton(withTitle: L10n.common.cancel)
+
+        // 좌우 화살표 키 네비게이션 활성화
+        alert.beginSheetModalWithArrowNavigation(for: window) { response in
+            if response == .alertFirstButtonReturn {
+                var allSuccess = true
+                for item in items {
+                    let success = self.delete(item)
+                    if !success {
+                        allSuccess = false
+                    }
+                }
+                completion(allSuccess)
             } else {
                 completion(false)
             }

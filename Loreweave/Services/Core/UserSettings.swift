@@ -78,6 +78,40 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     }
 }
 
+/// 자동 저장 옵션
+enum AutoSaveOption: String, CaseIterable, Identifiable {
+    case disabled = "disabled"
+    case everyFiveMinutes = "5min"
+    case everyTenMinutes = "10min"
+    case onTabChange = "tabChange"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .disabled: return L10n.get("settings.autoSave.disabled")
+        case .everyFiveMinutes: return L10n.get("settings.autoSave.everyFiveMinutes")
+        case .everyTenMinutes: return L10n.get("settings.autoSave.everyTenMinutes")
+        case .onTabChange: return L10n.get("settings.autoSave.onTabChange")
+        }
+    }
+
+    /// 자동 저장 간격 (초). disabled와 onTabChange는 0 반환 (타이머 사용 안 함)
+    var intervalSeconds: Int {
+        switch self {
+        case .disabled: return 0
+        case .everyFiveMinutes: return 300
+        case .everyTenMinutes: return 600
+        case .onTabChange: return 0
+        }
+    }
+
+    /// 자동 저장이 활성화되어 있는지 여부
+    var isEnabled: Bool {
+        self != .disabled
+    }
+}
+
 /// 사용자 설정 관리자
 @Observable
 final class UserSettings {
@@ -91,8 +125,7 @@ final class UserSettings {
         static let appLaunchBehavior = "userSettings.appLaunchBehavior"
         static let appTheme = "userSettings.appTheme"
         static let appLanguage = "userSettings.appLanguage"
-        static let autoSaveEnabled = "userSettings.autoSaveEnabled"
-        static let autoSaveInterval = "userSettings.autoSaveInterval"
+        static let autoSaveOption = "userSettings.autoSaveOption"
         static let aiProvider = "userSettings.aiProvider"
         static let aiApiKey = "userSettings.aiApiKey"
         static let editorFontSize = "userSettings.editorFontSize"
@@ -105,6 +138,7 @@ final class UserSettings {
         static let maxRecentProjects = "userSettings.maxRecentProjects"
         static let aiAssistantPanelWidth = "userSettings.aiAssistantPanelWidth"
         static let sidebarWidth = "userSettings.sidebarWidth"
+        static let appFontName = "userSettings.appFontName"
     }
 
     // MARK: - 일반 설정
@@ -150,16 +184,16 @@ final class UserSettings {
 
     // MARK: - 자동 저장 설정
 
-    /// 자동 저장 활성화
-    var autoSaveEnabled: Bool {
-        get { defaults.object(forKey: Keys.autoSaveEnabled) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: Keys.autoSaveEnabled) }
-    }
-
-    /// 자동 저장 간격 (초)
-    var autoSaveInterval: Int {
-        get { defaults.object(forKey: Keys.autoSaveInterval) as? Int ?? 30 }
-        set { defaults.set(newValue, forKey: Keys.autoSaveInterval) }
+    /// 자동 저장 옵션
+    var autoSaveOption: AutoSaveOption {
+        get {
+            guard let raw = defaults.string(forKey: Keys.autoSaveOption),
+                  let option = AutoSaveOption(rawValue: raw) else {
+                return .everyFiveMinutes
+            }
+            return option
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.autoSaveOption) }
     }
 
     // MARK: - AI 설정
@@ -190,9 +224,10 @@ final class UserSettings {
         set { defaults.set(Double(newValue), forKey: Keys.editorFontSize) }
     }
 
-    /// 에디터 줄간격
+    /// 에디터 줄간격 (lineHeightMultiple 값)
+    /// 1.0 = 100% 기본값, 1.25 = 125%, 1.5 = 150%, 2.0 = 200%
     var editorLineSpacing: CGFloat {
-        get { CGFloat(defaults.object(forKey: Keys.editorLineSpacing) as? Double ?? 1.5) }
+        get { CGFloat(defaults.object(forKey: Keys.editorLineSpacing) as? Double ?? 1.0) }
         set { defaults.set(Double(newValue), forKey: Keys.editorLineSpacing) }
     }
 
@@ -479,6 +514,15 @@ final class UserSettings {
         set { defaults.set(Double(newValue), forKey: Keys.sidebarWidth) }
     }
 
+    // MARK: - 앱 전역 폰트 설정
+
+    /// 앱 전역 폰트 이름 (에디터와 줄번호 제외)
+    /// 빈 문자열이면 시스템 폰트 사용
+    var appFontName: String {
+        get { defaults.string(forKey: Keys.appFontName) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.appFontName) }
+    }
+
     // MARK: - Private
 
     private init() {}
@@ -501,8 +545,7 @@ final class UserSettings {
             Keys.appLaunchBehavior,
             Keys.appTheme,
             Keys.appLanguage,
-            Keys.autoSaveEnabled,
-            Keys.autoSaveInterval,
+            Keys.autoSaveOption,
             Keys.aiProvider,
             Keys.aiApiKey,
             Keys.editorFontSize,
@@ -514,7 +557,8 @@ final class UserSettings {
             Keys.recentProjectPaths,
             Keys.maxRecentProjects,
             Keys.aiAssistantPanelWidth,
-            Keys.sidebarWidth
+            Keys.sidebarWidth,
+            Keys.appFontName
         ]
 
         for key in allKeys {

@@ -30,6 +30,10 @@
   "editor.alignCenter": "Align Center",
   "editor.alignRight": "Align Right",
   "editor.alignJustified": "Justify",
+  "editor.lineSpacing.none": "None",
+  "editor.lineSpacing.small": "Small",
+  "editor.lineSpacing.medium": "Medium",
+  "editor.lineSpacing.large": "Large",
 
   "findReplace.find": "Find",
   "findReplace.replace": "Replace",
@@ -79,6 +83,11 @@
   "tabs.close": "Close",
   "tabs.newTab": "New Tab",
 
+  "app.quit.saveChangesTitle": "Save Changes?",
+  "app.quit.saveChangesMessage": "'%@' has unsaved changes. Do you want to save before closing?",
+  "app.quit.dontSave": "Don't Save",
+  "app.quit.save": "Save",
+
   "common.cancel": "Cancel",
   "common.confirm": "Confirm",
   "common.delete": "Delete",
@@ -94,6 +103,10 @@
   "settings.language": "Language",
   "settings.aiProvider": "AI Provider",
   "settings.autoSave": "Auto Save",
+  "settings.autoSave.disabled": "Disabled",
+  "settings.autoSave.everyFiveMinutes": "Every 5 minutes",
+  "settings.autoSave.everyTenMinutes": "Every 10 minutes",
+  "settings.autoSave.onTabChange": "On tab change",
   "settings.theme": "Theme",
   "settings.theme.system": "System",
   "settings.theme.light": "Light",
@@ -103,6 +116,8 @@
   "settings.theme.changeTitle": "Theme Change",
   "settings.theme.changeMessage": "The app needs to restart to apply the theme change.",
   "settings.theme.quit": "Quit",
+  "settings.font.appFont": "App Font",
+  "settings.font.system": "System",
   "settings.language.system": "System Language",
   "settings.ai.local": "Local AI",
   "settings.editor": "Editor",
@@ -184,6 +199,7 @@
   "explorer.newFolderDefault": "New Folder",
   "explorer.deleteConfirmTitle": "Confirm Delete",
   "explorer.deleteConfirmMessage": "Are you sure you want to delete '%@'? This action cannot be undone.",
+  "explorer.deleteMultipleConfirmMessage": "Are you sure you want to delete %d items? This action cannot be undone.",
   "explorer.noProject": "No project open",
   "explorer.modifiedFileMoveTitle": "Cannot Move File",
   "explorer.modifiedFileMoveMessage": "The file has unsaved changes and cannot be moved. Would you like to save and move?",
@@ -238,6 +254,12 @@
   "shortcut.edit.selectAll": "Select All",
   "shortcut.edit.find": "Find",
   "shortcut.edit.findAndReplace": "Find and Replace",
+  "shortcut.edit.moveLineUp": "Move Line Up",
+  "shortcut.edit.moveLineDown": "Move Line Down",
+  "shortcut.edit.duplicateLineUp": "Duplicate Line Up",
+  "shortcut.edit.duplicateLineDown": "Duplicate Line Down",
+  "shortcut.edit.deleteWordBackward": "Delete Word Backward",
+  "shortcut.edit.deleteToLineStart": "Delete to Line Start",
 
   "shortcut.view.toggleSidebar": "Toggle Sidebar",
   "shortcut.view.toggleAIPanel": "Toggle AI Panel",
@@ -267,5 +289,8 @@
 
   "toolbar.goBack": "Go Back",
   "toolbar.goForward": "Go Forward",
-  "toolbar.searchPlaceholder": "Search..."
+  "toolbar.searchPlaceholder": "Search...",
+
+  "spotlight.quickActions": "Quick Actions",
+  "spotlight.noResults": "No results found"
 }

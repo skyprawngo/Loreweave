@@ -31,6 +31,12 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case selectAll = "edit.selectAll"
     case find = "edit.find"
     case findAndReplace = "edit.findAndReplace"
+    case moveLineUp = "edit.moveLineUp"
+    case moveLineDown = "edit.moveLineDown"
+    case duplicateLineUp = "edit.duplicateLineUp"
+    case duplicateLineDown = "edit.duplicateLineDown"
+    case deleteWordBackward = "edit.deleteWordBackward"
+    case deleteToLineStart = "edit.deleteToLineStart"
 
     // 보기 관련
     case toggleSidebar = "view.toggleSidebar"
@@ -69,7 +75,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .newFile, .newFolder, .openFile, .save, .saveAs, .closeTab, .closeAllTabs:
             return .file
-        case .undo, .redo, .cut, .copy, .paste, .selectAll, .find, .findAndReplace:
+        case .undo, .redo, .cut, .copy, .paste, .selectAll, .find, .findAndReplace,
+             .moveLineUp, .moveLineDown, .duplicateLineUp, .duplicateLineDown,
+             .deleteWordBackward, .deleteToLineStart:
             return .edit
         case .toggleSidebar, .toggleAIPanel, .zoomIn, .zoomOut, .resetZoom:
             return .view
@@ -80,16 +88,6 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
             return .ai
         case .openProject, .newProject, .refreshProject:
             return .project
-        }
-    }
-
-    /// macOS 시스템 기본 기능 여부 (텍스트 편집 기본 단축키)
-    var isSystemDefault: Bool {
-        switch self {
-        case .undo, .redo, .cut, .copy, .paste, .selectAll:
-            return true
-        default:
-            return false
         }
     }
 
@@ -257,6 +255,12 @@ final class KeyboardShortcutManager {
             ShortcutBinding(action: .selectAll, key: "a", modifiers: .command, isEnabled: true),
             ShortcutBinding(action: .find, key: "f", modifiers: .command, isEnabled: true),
             ShortcutBinding(action: .findAndReplace, key: "f", modifiers: [.command, .option], isEnabled: true),
+            ShortcutBinding(action: .moveLineUp, key: "up", modifiers: .option, isEnabled: true),
+            ShortcutBinding(action: .moveLineDown, key: "down", modifiers: .option, isEnabled: true),
+            ShortcutBinding(action: .duplicateLineUp, key: "up", modifiers: [.option, .shift], isEnabled: true),
+            ShortcutBinding(action: .duplicateLineDown, key: "down", modifiers: [.option, .shift], isEnabled: true),
+            ShortcutBinding(action: .deleteWordBackward, key: "backspace", modifiers: .option, isEnabled: true),
+            ShortcutBinding(action: .deleteToLineStart, key: "backspace", modifiers: .command, isEnabled: true),
 
             // 보기
             ShortcutBinding(action: .toggleSidebar, key: "b", modifiers: .command, isEnabled: true),

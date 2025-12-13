@@ -38,6 +38,28 @@ struct EditorSessionState: Codable {
     }
 }
 
+/// 프로젝트별 에디터 설정 (폰트, 크기, 줄간격)
+struct ProjectEditorSettings: Codable {
+    var fontName: String
+    var fontSize: CGFloat
+    var lineSpacing: CGFloat  // lineHeightMultiple 값
+
+    init(fontName: String = "SF Pro", fontSize: CGFloat = 14.0, lineSpacing: CGFloat = 1.0) {
+        self.fontName = fontName
+        self.fontSize = fontSize
+        self.lineSpacing = lineSpacing
+    }
+
+    /// UserSettings의 기본값에서 생성
+    static func fromUserSettings() -> ProjectEditorSettings {
+        ProjectEditorSettings(
+            fontName: UserSettings.shared.editorFontName,
+            fontSize: UserSettings.shared.editorFontSize,
+            lineSpacing: UserSettings.shared.editorLineSpacing
+        )
+    }
+}
+
 /// 에디터에서 열린 파일 탭
 struct EditorTab: Identifiable, Equatable {
     let id: UUID
@@ -132,10 +154,13 @@ final class EditorTabManager {
     }
 
     /// 탭 닫기
-    func closeTab(at index: Int) {
+    /// - Parameters:
+    ///   - index: 닫을 탭 인덱스
+    ///   - force: true이면 수정 여부와 관계없이 강제 닫기
+    func closeTab(at index: Int, force: Bool = false) {
         guard index >= 0 && index < tabs.count else { return }
 
-        // TODO: 수정된 파일이면 저장 여부 묻기
+        // TODO: force가 false이고 수정된 파일이면 저장 여부 묻기
 
         // 캐시에서 해당 탭 내용 삭제
         let tabURL = tabs[index].url
@@ -153,6 +178,20 @@ final class EditorTabManager {
         }
 
         notifyTabsChanged()
+    }
+
+    /// 특정 폴더 하위의 모든 파일 탭 닫기
+    /// - Parameter folderURL: 폴더 URL
+    func closeTabsUnder(folderURL: URL) {
+        let folderPath = folderURL.path
+
+        // 뒤에서부터 순회하여 삭제 (인덱스 변화 방지)
+        for index in stride(from: tabs.count - 1, through: 0, by: -1) {
+            let tabPath = tabs[index].url.path
+            if tabPath.hasPrefix(folderPath + "/") || tabPath == folderPath {
+                closeTab(at: index, force: true)
+            }
+        }
     }
 
     /// 특정 탭 선택
@@ -336,13 +375,24 @@ final class EditorTabManager {
 
     /// 세션 상태 파일명
     private static let sessionFileName = "editor-session.json"
+    /// 에디터 설정 파일명
+    private static let editorSettingsFileName = "editor-settings.json"
+
+    /// 프로젝트의 데이터 폴더 경로
+    private func dataFolderURL(for projectURL: URL) -> URL {
+        let projectName = projectURL.deletingPathExtension().lastPathComponent
+        let dataFolderName = ".\(projectName).\(ProjectManager.dataFolderExtension)"
+        return projectURL.appendingPathComponent(dataFolderName)
+    }
 
     /// 프로젝트의 세션 파일 경로
     private func sessionFileURL(for projectURL: URL) -> URL {
-        let projectName = projectURL.deletingPathExtension().lastPathComponent
-        let dataFolderName = ".\(projectName).\(ProjectManager.dataFolderExtension)"
-        let dataFolder = projectURL.appendingPathComponent(dataFolderName)
-        return dataFolder.appendingPathComponent(Self.sessionFileName)
+        return dataFolderURL(for: projectURL).appendingPathComponent(Self.sessionFileName)
+    }
+
+    /// 프로젝트의 에디터 설정 파일 경로
+    private func editorSettingsFileURL(for projectURL: URL) -> URL {
+        return dataFolderURL(for: projectURL).appendingPathComponent(Self.editorSettingsFileName)
     }
 
     /// 현재 탭 상태를 프로젝트에 저장
@@ -417,6 +467,40 @@ final class EditorTabManager {
             notifyTabsChanged()
         } catch {
             print("Failed to restore editor session: \(error)")
+        }
+    }
+
+    // MARK: - Editor Settings Persistence
+
+    /// 에디터 설정을 프로젝트에 저장
+    func saveEditorSettings(_ settings: ProjectEditorSettings, to projectURL: URL) {
+        let settingsFile = editorSettingsFileURL(for: projectURL)
+
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(settings)
+            try data.write(to: settingsFile)
+        } catch {
+            print("Failed to save editor settings: \(error)")
+        }
+    }
+
+    /// 프로젝트에서 에디터 설정 로드
+    func loadEditorSettings(from projectURL: URL) -> ProjectEditorSettings? {
+        let settingsFile = editorSettingsFileURL(for: projectURL)
+
+        guard FileManager.default.fileExists(atPath: settingsFile.path) else {
+            return nil
+        }
+
+        do {
+            let data = try Data(contentsOf: settingsFile)
+            let settings = try JSONDecoder().decode(ProjectEditorSettings.self, from: data)
+            return settings
+        } catch {
+            print("Failed to load editor settings: \(error)")
+            return nil
         }
     }
 }

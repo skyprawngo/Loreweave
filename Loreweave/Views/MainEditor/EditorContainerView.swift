@@ -13,12 +13,14 @@ import SwiftUI
 /// 에디터 컨테이너 (탭바 + 툴바 + 텍스트 에디터 + 상태바)
 struct EditorContainerView: View {
     @EnvironmentObject var appCommands: AppCommands
+    let projectManager: ProjectManager
 
-    private var tabManager: EditorTabManager { EditorTabManager.shared }
+    @State private var tabManager = EditorTabManager.shared
 
     // 에디터 상태
     @State private var text: String = ""
     @State private var fontSize: CGFloat = UserSettings.shared.editorFontSize
+    @State private var fontName: String = UserSettings.shared.editorFontName
     @State private var lineSpacingOption: LineSpacingOption = .normal
     @State private var cursorLine: Int = 1
     @State private var pendingFormatAction: MarkdownFormatType?
@@ -26,9 +28,11 @@ struct EditorContainerView: View {
     @State private var currentFileURL: URL?
     @State private var isLoading: Bool = false
     @State private var originalContent: String = ""
+    @State private var isLoadingSettings: Bool = false
 
-    /// AI 패널 공간 확보를 위한 우측 패딩 (텍스트 에디터 영역에만 적용)
-    var trailingPadding: CGFloat = 0
+    // 자동 저장 타이머
+    @State private var autoSaveTimer: Timer?
+    @State private var autoSaveOption: AutoSaveOption = UserSettings.shared.autoSaveOption
 
     private var currentFileExists: Bool {
         tabManager.selectedTab?.fileExists ?? true
@@ -41,35 +45,31 @@ struct EditorContainerView: View {
             } else {
                 // 탭바
                 TabBarView()
-                    .padding(.trailing, trailingPadding)
 
                 // 툴바
                 EditorToolbarView(
                     fontSize: $fontSize,
                     lineSpacingOption: $lineSpacingOption,
+                    fontName: $fontName,
                     onFormatAction: { formatType in
                         pendingFormatAction = formatType
                     }
                 )
-                .padding(.trailing, trailingPadding)
 
                 Divider()
-                    .padding(.trailing, trailingPadding)
 
-                // 코드 에디터
-                CodeEditorWrapperView(
+                // 코드 에디터 (커스텀 LoreEditor)
+                LoreEditorRepresentable(
                     text: $text,
                     cursorLine: $cursorLine,
                     selectedLineRange: $selectedLineRange,
                     fontSize: fontSize,
+                    fontName: fontName,
                     lineHeightMultiple: lineSpacingOption.rawValue,
-                    isEditable: currentFileExists,
-                    formatAction: pendingFormatAction,
-                    onFormatApplied: { pendingFormatAction = nil }
+                    isEditable: currentFileExists
                 )
                 .background(AppColors.textEditorBackground)
-                .clipped()  // gutter가 에디터 영역 밖으로 나가지 않도록 클리핑
-                .padding(.trailing, trailingPadding)
+                .clipped()
 
                 // 상태바
                 EditorStatusBarView(
@@ -78,12 +78,16 @@ struct EditorContainerView: View {
                     lineCount: lineCount,
                     selectedLineRange: selectedLineRange
                 )
-                .padding(.trailing, trailingPadding)
             }
         }
         .onChange(of: tabManager.selectedTab?.url) { oldURL, newURL in
             if let oldURL = oldURL {
                 tabManager.setCachedContent(text, for: oldURL)
+
+                // 탭 변경 시 자동 저장 옵션인 경우 저장
+                if autoSaveOption == .onTabChange {
+                    autoSaveIfModified(for: oldURL)
+                }
             }
             loadFileContent(from: newURL)
         }
@@ -96,11 +100,37 @@ struct EditorContainerView: View {
             tabManager.setCachedContent(newValue, for: currentFileURL!)
         }
         .onChange(of: fontSize) { _, newValue in
-            // 폰트 크기 변경 시 UserSettings에 저장
-            UserSettings.shared.editorFontSize = newValue
+            // 폰트 크기 변경 시 프로젝트 설정에 저장
+            guard !isLoadingSettings else { return }
+            saveEditorSettingsToProject()
+        }
+        .onChange(of: fontName) { _, newValue in
+            // 폰트 이름 변경 시 프로젝트 설정에 저장
+            guard !isLoadingSettings else { return }
+            saveEditorSettingsToProject()
+        }
+        .onChange(of: lineSpacingOption) { _, newValue in
+            // 줄간격 변경 시 프로젝트 설정에 저장
+            guard !isLoadingSettings else { return }
+            saveEditorSettingsToProject()
+        }
+        .onChange(of: projectManager.currentProject?.path) { oldPath, newPath in
+            // 프로젝트가 변경되면 해당 프로젝트의 에디터 설정 로드
+            if oldPath != newPath {
+                loadEditorSettingsFromProject()
+            }
         }
         .onAppear {
             loadFileContent(from: tabManager.selectedTab?.url)
+            loadEditorSettingsFromProject()
+            setupAutoSaveTimer()
+        }
+        .onDisappear {
+            stopAutoSaveTimer()
+        }
+        .onChange(of: autoSaveOption) { _, newValue in
+            UserSettings.shared.autoSaveOption = newValue
+            setupAutoSaveTimer()
         }
         .onReceive(appCommands.$saveRequested) { requested in
             if requested {
@@ -108,6 +138,32 @@ struct EditorContainerView: View {
                 appCommands.saveRequested = false
             }
         }
+        .onReceive(appCommands.$zoomInRequested) { requested in
+            if requested {
+                increaseFontSize()
+                appCommands.zoomInRequested = false
+            }
+        }
+        .onReceive(appCommands.$zoomOutRequested) { requested in
+            if requested {
+                decreaseFontSize()
+                appCommands.zoomOutRequested = false
+            }
+        }
+    }
+
+    // MARK: - Font Size
+
+    /// 폰트 크기 증가 (최대 72pt)
+    private func increaseFontSize() {
+        let newSize = min(fontSize + 2, 72)
+        fontSize = newSize
+    }
+
+    /// 폰트 크기 축소 (최소 8pt)
+    private func decreaseFontSize() {
+        let newSize = max(fontSize - 2, 8)
+        fontSize = newSize
     }
 
     // MARK: - Empty State
@@ -183,6 +239,91 @@ struct EditorContainerView: View {
     private var lineCount: Int {
         text.isEmpty ? 1 : text.components(separatedBy: .newlines).count
     }
+
+    // MARK: - Project Editor Settings
+
+    /// 프로젝트에서 에디터 설정 로드
+    private func loadEditorSettingsFromProject() {
+        guard let projectPath = projectManager.currentProject?.path else { return }
+
+        isLoadingSettings = true
+
+        if let settings = tabManager.loadEditorSettings(from: projectPath) {
+            fontName = settings.fontName
+            fontSize = settings.fontSize
+            // lineSpacing을 LineSpacingOption으로 변환
+            lineSpacingOption = LineSpacingOption(rawValue: settings.lineSpacing) ?? .normal
+        } else {
+            // 프로젝트에 설정이 없으면 UserSettings의 기본값 사용
+            fontName = UserSettings.shared.editorFontName
+            fontSize = UserSettings.shared.editorFontSize
+            lineSpacingOption = LineSpacingOption(rawValue: UserSettings.shared.editorLineSpacing) ?? .normal
+        }
+
+        isLoadingSettings = false
+    }
+
+    /// 에디터 설정을 프로젝트에 저장
+    private func saveEditorSettingsToProject() {
+        guard let projectPath = projectManager.currentProject?.path else { return }
+
+        let settings = ProjectEditorSettings(
+            fontName: fontName,
+            fontSize: fontSize,
+            lineSpacing: lineSpacingOption.rawValue
+        )
+
+        tabManager.saveEditorSettings(settings, to: projectPath)
+    }
+
+    // MARK: - Auto Save
+
+    /// 자동 저장 타이머 설정
+    private func setupAutoSaveTimer() {
+        stopAutoSaveTimer()
+
+        // 타이머 기반 자동 저장이 아닌 경우 (없음, 탭 변경 시) 타이머 사용 안 함
+        guard autoSaveOption.intervalSeconds > 0 else { return }
+
+        let interval = TimeInterval(autoSaveOption.intervalSeconds)
+        autoSaveTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            autoSaveAllModifiedTabs()
+        }
+    }
+
+    /// 자동 저장 타이머 정지
+    private func stopAutoSaveTimer() {
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = nil
+    }
+
+    /// 수정된 모든 탭 자동 저장
+    private func autoSaveAllModifiedTabs() {
+        // 현재 편집 중인 탭 저장
+        if let url = currentFileURL, tabManager.isModified(url: url) {
+            if tabManager.saveCurrentTab(content: text) {
+                originalContent = text
+            }
+        }
+
+        // 다른 수정된 탭들도 캐시에서 저장
+        for (index, tab) in tabManager.tabs.enumerated() {
+            guard tab.isModified, tab.url != currentFileURL else { continue }
+            if let cachedContent = tabManager.getCachedContent(for: tab.url) {
+                _ = tabManager.saveTab(at: index, content: cachedContent)
+            }
+        }
+    }
+
+    /// 특정 URL의 탭이 수정되었으면 저장
+    private func autoSaveIfModified(for url: URL) {
+        guard let index = tabManager.findTab(with: url),
+              tabManager.tabs[index].isModified else { return }
+
+        if let cachedContent = tabManager.getCachedContent(for: url) {
+            _ = tabManager.saveTab(at: index, content: cachedContent)
+        }
+    }
 }
 
 // MARK: - Editor Status Bar View
@@ -224,6 +365,6 @@ struct EditorStatusBarView: View {
 }
 
 #Preview {
-    EditorContainerView(trailingPadding: 0)
+    EditorContainerView(projectManager: ProjectManager.shared)
         .environmentObject(AppCommands.shared)
 }

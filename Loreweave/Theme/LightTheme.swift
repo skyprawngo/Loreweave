@@ -68,7 +68,7 @@ enum LightTheme: ThemePalette, ThemePaletteNSColor {
 
     // MARK: - Tab Bar
 
-    static var tabSelectedBackground: Color {
+    static var tabInactiveBackground: Color {
         Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
     }
 
@@ -80,11 +80,11 @@ enum LightTheme: ThemePalette, ThemePaletteNSColor {
         Color.clear
     }
 
-    static var tabSelectedBorder: Color {
+    static var tabActiveBorder: Color {
         Color(nsColor: .separatorColor)
     }
 
-    static var tabDefaultBorder: Color {
+    static var tabInactiveBorder: Color {
         Color(nsColor: .separatorColor).opacity(0.3)
     }
 
@@ -232,5 +232,17 @@ enum LightTheme: ThemePalette, ThemePaletteNSColor {
 
     static var nsEditorBackground: NSColor {
         .textBackgroundColor
+    }
+
+    static var nsTextEditorBackground: NSColor {
+        .textBackgroundColor
+    }
+
+    static var nsCurrentLineHighlight: NSColor {
+        NSColor.unemphasizedSelectedContentBackgroundColor.withAlphaComponent(0.5)
+    }
+
+    static var nsEditorCursor: NSColor {
+        .labelColor
     }
 }
