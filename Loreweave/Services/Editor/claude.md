@@ -7,6 +7,11 @@
 | 파일 | 역할 |
 |------|------|
 | `EditorTabManager.swift` | 에디터 탭 상태 관리 (열린 파일, 선택된 탭) |
+| `TextEngine/` | 커스텀 텍스트 엔진 (상세: `TextEngine/claude.md`) |
+
+## 프로젝트별 설정 저장
+
+에디터 설정(폰트, 크기, 줄간격)은 프로젝트 숨김폴더 `.{projectName}.weavedata/editor-settings.json`에 저장됩니다.
 
 ---
 
