@@ -14,7 +14,6 @@ import AppKit
 struct EditorToolbarView: View {
     @Binding var fontSize: CGFloat
     @Binding var lineSpacingOption: LineSpacingOption
-    @Binding var textAlignment: TextAlignmentOption
     var onFormatAction: ((MarkdownFormatType) -> Void)?
 
     var body: some View {
@@ -27,48 +26,13 @@ struct EditorToolbarView: View {
                 ToolbarButton(icon: "strikethrough", tooltip: L10n.editor.strikethrough, action: { onFormatAction?(.strikethrough) })
             }
 
-            // 텍스트 정렬 버튼
-            HStack(spacing: 2) {
-                ForEach(TextAlignmentOption.allCases) { alignment in
-                    ToolbarToggleButton(
-                        icon: alignment.icon,
-                        tooltip: alignment.tooltip,
-                        isSelected: textAlignment == alignment,
-                        action: { textAlignment = alignment }
-                    )
-                }
-            }
-
-            // 폰트 크기 슬라이더 및 입력 필드
-            HStack(spacing: 4) {
-                Image(systemName: "textformat.size")
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppColors.toolbarIcon)
-
-                Slider(value: $fontSize, in: 12...24, step: 1)
-                    .frame(width: 80)
-                    .controlSize(.small)
-                    .tint(AppColors.accent)
-
-                FontSizeInputField(fontSize: $fontSize)
-            }
-            .help(L10n.editor.fontSize)
+            // 폰트 크기 드래그 입력 필드
+            FontSizeControl(fontSize: $fontSize)
+                .help(L10n.editor.fontSize)
 
             // 줄 간격 드롭다운
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.up.and.down.text.horizontal")
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppColors.toolbarIcon)
-
-                Picker("", selection: $lineSpacingOption) {
-                    ForEach(LineSpacingOption.allCases) { option in
-                        Text(option.displayName).tag(option)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 70)
-            }
-            .help(L10n.editor.lineSpacing)
+            LineSpacingControl(lineSpacingOption: $lineSpacingOption)
+                .help(L10n.editor.lineSpacing)
 
             Spacer()
 
@@ -82,13 +46,13 @@ struct EditorToolbarView: View {
             } label: {
                 Label(L10n.ai.tools, systemImage: "wand.and.stars")
                     .font(.system(size: 12))
+                    .foregroundStyle(AppColors.toolbarIcon)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .environment(\.controlActiveState, .key)
     }
 }
 
@@ -111,42 +75,31 @@ struct ToolbarButton: View {
     }
 }
 
-// MARK: - Toolbar Toggle Button
+// MARK: - Font Size Control
 
-struct ToolbarToggleButton: View {
-    let icon: String
-    let tooltip: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 13))
-                .foregroundStyle(isSelected ? AppColors.toolbarIconActive : AppColors.toolbarIcon)
-                .frame(width: 28, height: 24)
-                .background(isSelected ? AppColors.toolbarToggleSelected : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-        }
-        .buttonStyle(.plain)
-        .help(tooltip)
-    }
-}
-
-// MARK: - Font Size Input Field
-
-struct FontSizeInputField: View {
+struct FontSizeControl: View {
     @Binding var fontSize: CGFloat
     @State private var inputText: String = ""
+    @State private var isDragging: Bool = false
+    @State private var dragStartValue: CGFloat = 0
     @FocusState private var isFocused: Bool
 
+    private let minSize: CGFloat = 8
+    private let maxSize: CGFloat = 72
+    private let dragSensitivity: CGFloat = 0.5
+
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
+            Image(systemName: "textformat.size")
+                .font(.system(size: 12))
+                .foregroundStyle(AppColors.toolbarIcon)
+
             TextField("", text: $inputText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11))
-                .frame(width: 24)
-                .multilineTextAlignment(.trailing)
+                .foregroundStyle(AppColors.textPrimary)
+                .frame(width: 18)
+                .multilineTextAlignment(.leading)
                 .focused($isFocused)
                 .onSubmit {
                     applyFontSize()
@@ -155,7 +108,7 @@ struct FontSizeInputField: View {
                     if focused {
                         inputText = "\(Int(fontSize))"
                     } else {
-                        inputText = "\(Int(fontSize))"
+                        applyFontSize()
                     }
                 }
 
@@ -163,87 +116,115 @@ struct FontSizeInputField: View {
                 .font(.system(size: 11))
                 .foregroundStyle(AppColors.textSecondary)
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(isFocused ? AppColors.controlBackground : Color.clear)
+            RoundedRectangle(cornerRadius: 6)
+                .fill(AppColors.controlBackground)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(isFocused ? AppColors.accent : Color.clear, lineWidth: 1)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    if !isDragging {
+                        isDragging = true
+                        dragStartValue = fontSize
+                        NSCursor.resizeLeftRight.push()
+                    }
+                    let delta = value.translation.width * dragSensitivity
+                    let newValue = dragStartValue + delta
+                    let clampedValue = min(maxSize, max(minSize, round(newValue)))
+                    fontSize = clampedValue
+                    inputText = "\(Int(clampedValue))"
+                }
+                .onEnded { _ in
+                    isDragging = false
+                    NSCursor.pop()
+                }
         )
+        .onHover { hovering in
+            if hovering && !isDragging {
+                NSCursor.resizeLeftRight.push()
+            } else if !hovering && !isDragging {
+                NSCursor.pop()
+            }
+        }
         .onAppear {
             inputText = "\(Int(fontSize))"
         }
         .onChange(of: fontSize) { _, newValue in
-            if !isFocused {
+            // 외부에서 fontSize가 변경된 경우 inputText 동기화
+            if !isDragging && !isFocused {
                 inputText = "\(Int(newValue))"
             }
         }
     }
 
     private func applyFontSize() {
-        if let value = Int(inputText), value >= 8, value <= 72 {
+        if let value = Int(inputText), value >= Int(minSize), value <= Int(maxSize) {
             fontSize = CGFloat(value)
         }
         inputText = "\(Int(fontSize))"
-        isFocused = false
     }
 }
 
-// MARK: - Text Alignment Option
+// MARK: - Line Spacing Control (아이콘 포함 드롭다운)
 
-enum TextAlignmentOption: CaseIterable, Identifiable {
-    case left
-    case center
-    case right
-    case justified
+struct LineSpacingControl: View {
+    @Binding var lineSpacingOption: LineSpacingOption
 
-    var id: Self { self }
+    var body: some View {
+        Menu {
+            ForEach(LineSpacingOption.allCases) { option in
+                Button(action: { lineSpacingOption = option }) {
+                    HStack {
+                        Text(option.displayName)
+                        if lineSpacingOption == option {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.up.and.down.text.horizontal")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppColors.toolbarIcon)
 
-    var icon: String {
-        switch self {
-        case .left: return "text.alignleft"
-        case .center: return "text.aligncenter"
-        case .right: return "text.alignright"
-        case .justified: return "text.justify"
+                Text(lineSpacingOption.displayName)
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppColors.textPrimary)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(AppColors.controlBackground)
+            )
         }
-    }
-
-    var nsTextAlignment: NSTextAlignment {
-        switch self {
-        case .left: return .left
-        case .center: return .center
-        case .right: return .right
-        case .justified: return .justified
-        }
-    }
-
-    var tooltip: String {
-        switch self {
-        case .left: return L10n.editor.alignLeft
-        case .center: return L10n.editor.alignCenter
-        case .right: return L10n.editor.alignRight
-        case .justified: return L10n.editor.alignJustified
-        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 }
 
 // MARK: - Line Spacing Option
 
+/// 줄간격 옵션 - lineHeightMultiple 값 사용
+/// 100%가 기본값(추가 간격 없음), 그 이상은 줄 높이 배수 증가
 enum LineSpacingOption: CGFloat, CaseIterable, Identifiable {
-    case compact = 4      // 80%
-    case normal = 8       // 100%
-    case relaxed = 12     // 125%
-    case loose = 16       // 150%
-    case extraLoose = 20  // 200%
+    case normal = 1.0       // 100% - 기본 줄 높이 (추가 간격 없음)
+    case relaxed = 1.25     // 125%
+    case loose = 1.5        // 150%
+    case extraLoose = 2.0   // 200%
 
     var id: CGFloat { rawValue }
 
     var displayName: String {
         switch self {
-        case .compact: return "80%"
         case .normal: return "100%"
         case .relaxed: return "125%"
         case .loose: return "150%"
@@ -254,8 +235,7 @@ enum LineSpacingOption: CGFloat, CaseIterable, Identifiable {
 
 #Preview {
     EditorToolbarView(
-        fontSize: .constant(16),
-        lineSpacingOption: .constant(.normal),
-        textAlignment: .constant(.left)
+        fontSize: .constant(14),
+        lineSpacingOption: .constant(.normal)
     )
 }

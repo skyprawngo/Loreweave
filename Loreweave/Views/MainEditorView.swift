@@ -4,11 +4,11 @@
 //
 //  메인 에디터 화면
 //  계층 구조:
-//  - MainEditorView (ZStack)
-//    ├── NavigationSplitView (배경, 에디터 우측 패딩으로 AI 패널 공간 확보)
+//  - MainEditorView (HStack)
+//    ├── NavigationSplitView
 //    │   ├── SidebarView (sidebar)
 //    │   └── EditorContainerView (detail)
-//    └── AIAssistantView (오버레이, 우측)
+//    └── AIAssistantView (우측 패널)
 //
 
 import SwiftUI
@@ -23,86 +23,36 @@ struct MainEditorView: View {
 
     // AI 패널 크기
     private let aiPanelWidth: CGFloat = 350
-    private let aiPanelPadding: CGFloat = 8
-
-    /// AI 패널 전체 폭 (패널 폭 + 패딩)
-    private var aiPanelTotalWidth: CGFloat {
-        aiPanelWidth + aiPanelPadding * 2
-    }
 
     // UI 상태
     @State private var isAIPanelVisible: Bool = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var searchText: String = ""
 
-    // 찾기/바꾸기 상태
-    @State private var showFindReplace: Bool = false
-    @State private var findSearchText: String = ""
-    @State private var replaceText: String = ""
-    @State private var searchScope: SearchScope = .currentFile
-    @State private var searchOptions: SearchOptions = SearchOptions()
-    @State private var showReplaceField: Bool = false
-    @State private var matchCount: Int = 0
-
     var body: some View {
-        ZStack(alignment: .trailing) {
+        HStack(spacing: 0) {
             // 메인 콘텐츠 (NavigationSplitView)
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 // 사이드바
                 SidebarView()
                     .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
             } detail: {
-                // 에디터 컨테이너 (AI 패널 폭 정보 전달)
-                EditorContainerView(
-                    showFindReplace: $showFindReplace,
-                    findSearchText: $findSearchText,
-                    replaceText: $replaceText,
-                    searchScope: $searchScope,
-                    searchOptions: $searchOptions,
-                    showReplaceField: $showReplaceField,
-                    matchCount: $matchCount,
-                    trailingPadding: isAIPanelVisible ? aiPanelTotalWidth : 0
-                )
-                .environmentObject(appCommands)
+                // 에디터 컨테이너
+                EditorContainerView(trailingPadding: 0)
+                    .environmentObject(appCommands)
             }
             .navigationSplitViewStyle(.balanced)
 
-            // AI 첨삭 패널 (우측 오버레이)
+            // AI 첨삭 패널 (우측)
             if isAIPanelVisible {
-                AIAssistantView(onToggle: {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        isAIPanelVisible = false
-                    }
-                })
-                .padding(.horizontal, aiPanelPadding)
-                .padding(.bottom, aiPanelPadding)
-                .frame(width: aiPanelTotalWidth)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-
-            // AI 패널 토글 버튼 (패널 닫혔을 때만 표시)
-            if !isAIPanelVisible {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button(action: {
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                isAIPanelVisible = true
-                            }
-                        }) {
-                            Image(systemName: "sparkle")
-                                .font(.system(size: 14))
-                                .foregroundStyle(AppColors.toolbarIcon)
-                        }
-                        .buttonStyle(.plain)
-                        .help(L10n.ai.togglePanel)
-                        .padding(.trailing, 16)
-                        .padding(.top, 14)
-                    }
-                    Spacer()
-                }
+                AIAssistantView()
+                    .frame(width: aiPanelWidth)
+                    .ignoresSafeArea(.container, edges: .top)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        .background(ThemeAwareBackground(material: .sidebar, blendingMode: .behindWindow))
+        .ignoresSafeArea(.container, edges: .top)
         .animation(.easeInOut(duration: 0.25), value: isAIPanelVisible)
         .animation(.easeInOut(duration: 0.25), value: columnVisibility)
         .toolbar {
@@ -114,15 +64,23 @@ struct MainEditorView: View {
                 )
             }
 
-            // 검색 필드
+            // 스포트라이트 검색
             ToolbarItem(placement: .principal) {
-                SearchFieldView(text: $searchText) {
-                    if !showFindReplace {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showFindReplace = true
-                        }
-                    }
+                SpotlightView(text: $searchText) {
+                    // TODO: 검색 기능 구현
                 }
+            }
+
+            // AI 패널 토글 버튼
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isAIPanelVisible.toggle()
+                    }
+                }) {
+                    Image(systemName: isAIPanelVisible ? "sidebar.trailing" : "sparkle")
+                }
+                .help(L10n.ai.togglePanel)
             }
         }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
@@ -180,11 +138,6 @@ struct MainEditorView: View {
         }
         .onReceive(appCommands.$openProjectRequested) { requested in
             if requested { handleOpenProject(); appCommands.openProjectRequested = false }
-        }
-        .onChange(of: searchText) { oldValue, newValue in
-            if !newValue.isEmpty && oldValue.isEmpty {
-                appCommands.findRequested = true
-            }
         }
     }
 

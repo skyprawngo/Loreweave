@@ -41,6 +41,9 @@ struct LoreweaveApp: App {
             DelayedContentView {
                 MainEditorView(projectManager: projectManager)
                     .environmentObject(appCommands)
+                    .background(WindowAccessor { window in
+                        window.titlebarAppearsTransparent = true
+                    })
             }
         }
         .windowStyle(.automatic)

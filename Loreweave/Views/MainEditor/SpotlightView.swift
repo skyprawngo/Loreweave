@@ -1,13 +1,13 @@
 //
-//  SearchFieldView.swift
+//  SpotlightView.swift
 //  Loreweave
 //
-//  macOS 네이티브 스타일 검색 필드 (툴바 및 찾기/바꾸기용)
+//  스포트라이트 검색 필드 (윈도우 타이틀바에 위치)
 //
 
 import SwiftUI
 
-struct SearchFieldView: View {
+struct SpotlightView: View {
     @Binding var text: String
     var placeholder: String = L10n.get("toolbar.searchPlaceholder")
     /// 검색 필드 클릭 시 호출되는 콜백
@@ -50,8 +50,8 @@ struct SearchFieldView: View {
 
 #Preview {
     VStack(spacing: 20) {
-        SearchFieldView(text: .constant(""))
-        SearchFieldView(text: .constant("검색어"))
+        SpotlightView(text: .constant(""))
+        SpotlightView(text: .constant("검색어"))
     }
     .padding(40)
     .background(Color(nsColor: .windowBackgroundColor))

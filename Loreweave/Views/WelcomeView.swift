@@ -63,7 +63,7 @@ struct WelcomeView: View {
                 Spacer()
             }
             .frame(width: 300)
-            .background(AppColors.barBackground)
+            .background(ThemeAwareBackground(material: .sidebar, blendingMode: .behindWindow))
 
             Divider()
 
@@ -106,7 +106,7 @@ struct WelcomeView: View {
                 }
             }
             .frame(minWidth: 400)
-            .background(AppColors.controlBackground)
+            .background(ThemeAwareBackground(material: .contentBackground, blendingMode: .behindWindow))
         }
         .frame(minWidth: 700, minHeight: 450)
         .sheet(isPresented: $isShowingNewProjectSheet) {

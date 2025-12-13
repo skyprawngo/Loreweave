@@ -2,263 +2,134 @@
 //  AppColors.swift
 //  Loreweave
 //
-//  앱 전역 색상 라우터 - NSColor 시스템 색상을 의미론적 이름으로 제공
-//  시스템 색상을 사용하여 다크/라이트 모드, 윈도우 활성/비활성 상태 자동 대응
-//
-//  NSColor 시스템 색상 참고:
-//  - windowBackgroundColor: 윈도우 배경 (라이트: 밝은 회색, 다크: 어두운 회색)
-//  - controlBackgroundColor: 컨트롤 배경 (텍스트필드, 리스트 등)
-//  - textBackgroundColor: 텍스트 영역 배경 (라이트: 흰색, 다크: 어두운 색)
-//  - underPageBackgroundColor: 스크롤 영역 밖 배경
-//  - labelColor: 기본 텍스트 (가장 높은 대비)
-//  - secondaryLabelColor: 보조 텍스트 (중간 대비)
-//  - tertiaryLabelColor: 3차 텍스트 (낮은 대비, 힌트/플레이스홀더)
-//  - quaternaryLabelColor: 4차 텍스트 (매우 낮은 대비)
-//  - separatorColor: 구분선
-//  - selectedContentBackgroundColor: 선택된 콘텐츠 배경 (포커스됨)
-//  - unemphasizedSelectedContentBackgroundColor: 선택된 콘텐츠 배경 (포커스 안됨)
+//  앱 전역 색상 라우터
+//  현재 선택된 테마에서 색상을 가져와 반환
+//  뷰에서는 AppColors를 통해 색상에 접근하고, 테마 변경 시 자동으로 반영됨
 //
 
 import SwiftUI
+import AppKit
 
-/// 앱 전역 색상 팔레트 (라우터)
-/// NSColor 시스템 색상을 사용하여 모든 상태 변화에 자동 대응
+/// 앱 전역 색상 라우터
+/// 현재 테마에서 색상을 가져옴
 enum AppColors {
 
-    // MARK: - Bar Background
+    // MARK: - Current Theme
 
-    /// 툴바/탭바 배경색 - 윈도우 배경과 동일
-    static var barBackground: Color {
-        Color(nsColor: .windowBackgroundColor)
+    /// 현재 적용 중인 테마 타입 반환
+    private static var currentTheme: any ThemePalette.Type {
+        switch UserSettings.shared.appTheme {
+        case .system:
+            return SystemTheme.self
+        case .light:
+            return LightTheme.self
+        case .dark:
+            return DarkTheme.self
+        case .opaque:
+            return OpaqueTheme.self
+        }
     }
 
-    // MARK: - Tab Bar
-
-    /// 탭 배경색 (선택됨) - 약간 밝은/어두운 배경으로 구분
-    static var tabSelectedBackground: Color {
-        Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
+    /// 현재 테마가 불투명 테마인지 여부
+    static var isOpaqueTheme: Bool {
+        currentTheme.isOpaque
     }
 
-    /// 탭 배경색 (호버) - 선택 배경의 투명한 버전
-    static var tabHoverBackground: Color {
-        Color(nsColor: .unemphasizedSelectedContentBackgroundColor).opacity(0.5)
-    }
+    // MARK: - Background
 
-    /// 탭 배경색 (기본) - 투명
-    static var tabDefaultBackground: Color {
-        Color.clear
-    }
-
-    /// 탭 테두리색 (선택됨)
-    static var tabSelectedBorder: Color {
-        Color(nsColor: .separatorColor)
-    }
-
-    /// 탭 테두리색 (기본)
-    static var tabDefaultBorder: Color {
-        Color(nsColor: .separatorColor).opacity(0.3)
-    }
-
-    /// 탭 텍스트색 - 기본 라벨 색상
-    static var tabText: Color {
-        Color(nsColor: .labelColor)
-    }
-
-    /// 탭 닫기 버튼 배경 (호버)
-    static var tabCloseHoverBackground: Color {
-        Color(nsColor: .quaternaryLabelColor)
-    }
-
-    // MARK: - Toolbar
-
-    /// 툴바 버튼 배경 (호버) - 악센트 색상의 투명한 버전
-    static var toolbarButtonHover: Color {
-        Color(nsColor: .controlAccentColor).opacity(0.1)
-    }
-
-    /// 툴바 버튼 배경 (클릭)
-    static var toolbarButtonPressed: Color {
-        Color(nsColor: .controlAccentColor).opacity(0.2)
-    }
-
-    /// 툴바 토글 버튼 배경 (선택됨)
-    static var toolbarToggleSelected: Color {
-        Color(nsColor: .controlAccentColor).opacity(0.15)
-    }
-
-    /// 툴바 아이콘 색상 - 기본 라벨 (항상 밝은 색상)
-    static var toolbarIcon: Color {
-        Color(nsColor: .labelColor)
-    }
-
-    /// 툴바 아이콘 색상 (활성) - 기본 라벨 (높은 강조)
-    static var toolbarIconActive: Color {
-        Color(nsColor: .labelColor)
-    }
-
-    // MARK: - Add Button (탭바 + 버튼)
-
-    /// 추가 버튼 아이콘 색상 - 기본 라벨 (항상 밝은 색상)
-    static var addButtonIcon: Color {
-        Color(nsColor: .labelColor)
-    }
-
-    /// 추가 버튼 배경 (호버)
-    static var addButtonHover: Color {
-        Color(nsColor: .controlAccentColor).opacity(0.1)
-    }
-
-    /// 추가 버튼 배경 (클릭)
-    static var addButtonPressed: Color {
-        Color(nsColor: .controlAccentColor).opacity(0.2)
-    }
-
-    // MARK: - Sidebar
-
-    /// 사이드바 배경 - 윈도우 배경
-    static var sidebarBackground: Color {
-        Color(nsColor: .windowBackgroundColor)
-    }
-
-    /// 사이드바 툴바 그라데이션
-    static var sidebarToolbarGradient: LinearGradient {
-        LinearGradient(
-            colors: [Color(nsColor: .windowBackgroundColor), Color(nsColor: .windowBackgroundColor)],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
-    /// 사이드바 아이템 (선택됨) - 선택된 콘텐츠 배경
-    static var sidebarItemSelected: Color {
-        Color(nsColor: .selectedContentBackgroundColor)
-    }
-
-    /// 사이드바 아이템 (호버) - 비강조 선택 배경의 투명 버전
-    static var sidebarItemHover: Color {
-        Color(nsColor: .unemphasizedSelectedContentBackgroundColor).opacity(0.5)
-    }
-
-    /// 사이드바 섹션 헤더 텍스트 - 기본 라벨 (항상 밝은 색상)
-    static var sidebarHeaderText: Color {
-        Color(nsColor: .labelColor)
-    }
-
-    // MARK: - Content Area
-
-    /// 콘텐츠 영역 배경 - 텍스트 배경
-    static var contentBackground: Color {
-        Color(nsColor: .textBackgroundColor)
-    }
-
-    /// 텍스트 에디터 배경 - 텍스트 배경 (라이트: 흰색, 다크: 어두운 색)
-    static var textEditorBackground: Color {
-        Color(nsColor: .textBackgroundColor)
-    }
+    static var background: Color { currentTheme.background }
+    static var barBackground: Color { currentTheme.barBackground }
+    static var sidebarBackground: Color { currentTheme.sidebarBackground }
+    static var contentBackground: Color { currentTheme.contentBackground }
+    static var textEditorBackground: Color { currentTheme.textEditorBackground }
+    static var controlBackground: Color { currentTheme.controlBackground }
 
     // MARK: - Text
 
-    /// 기본 텍스트 - 가장 높은 대비
-    static var textPrimary: Color {
-        Color(nsColor: .labelColor)
-    }
+    static var textPrimary: Color { currentTheme.textPrimary }
+    static var textSecondary: Color { currentTheme.textSecondary }
+    static var textTertiary: Color { currentTheme.textTertiary }
+    static var textDisabled: Color { currentTheme.textDisabled }
 
-    /// 보조 텍스트 - 중간 대비 (부가 정보)
-    static var textSecondary: Color {
-        Color(nsColor: .secondaryLabelColor)
-    }
+    // MARK: - Tab Bar
 
-    /// 3차 텍스트 - 낮은 대비 (힌트, 플레이스홀더)
-    static var textTertiary: Color {
-        Color(nsColor: .tertiaryLabelColor)
-    }
+    static var tabSelectedBackground: Color { currentTheme.tabSelectedBackground }
+    static var tabHoverBackground: Color { currentTheme.tabHoverBackground }
+    static var tabDefaultBackground: Color { currentTheme.tabDefaultBackground }
+    static var tabSelectedBorder: Color { currentTheme.tabSelectedBorder }
+    static var tabDefaultBorder: Color { currentTheme.tabDefaultBorder }
+    static var tabText: Color { currentTheme.tabText }
+    static var tabCloseHoverBackground: Color { currentTheme.tabCloseHoverBackground }
+    static var tabSelectedShadow: Color { currentTheme.tabSelectedShadow }
 
-    /// 비활성 텍스트
-    static var textDisabled: Color {
-        Color(nsColor: .disabledControlTextColor)
-    }
+    // MARK: - Toolbar
 
-    // MARK: - Controls
+    static var toolbarButtonHover: Color { currentTheme.toolbarButtonHover }
+    static var toolbarButtonPressed: Color { currentTheme.toolbarButtonPressed }
+    static var toolbarToggleSelected: Color { currentTheme.toolbarToggleSelected }
+    static var toolbarIcon: Color { currentTheme.toolbarIcon }
+    static var toolbarIconActive: Color { currentTheme.toolbarIconActive }
 
-    /// 컨트롤 배경 - 텍스트필드, 입력 영역 등
-    static var controlBackground: Color {
-        Color(nsColor: .controlBackgroundColor)
-    }
+    // MARK: - Sidebar
 
-    /// 컨트롤 테두리
-    static var controlBorder: Color {
-        Color(nsColor: .separatorColor)
-    }
+    static var sidebarItemSelected: Color { currentTheme.sidebarItemSelected }
+    static var sidebarItemHover: Color { currentTheme.sidebarItemHover }
+    static var sidebarHeaderText: Color { currentTheme.sidebarHeaderText }
 
     // MARK: - Separators
 
-    /// 구분선
-    static var separator: Color {
-        Color(nsColor: .separatorColor)
-    }
-
-    /// 굵은 구분선 (gridColor 사용)
-    static var separatorOpaque: Color {
-        Color(nsColor: .gridColor)
-    }
+    static var separator: Color { currentTheme.separator }
+    static var separatorOpaque: Color { currentTheme.separatorOpaque }
+    static var controlBorder: Color { currentTheme.controlBorder }
 
     // MARK: - Selection
 
-    /// 선택 영역 배경 (강조, 포커스됨)
-    static var selectionEmphasized: Color {
-        Color(nsColor: .selectedContentBackgroundColor)
-    }
+    static var selectionEmphasized: Color { currentTheme.selectionEmphasized }
+    static var selectionUnemphasized: Color { currentTheme.selectionUnemphasized }
 
-    /// 선택 영역 배경 (비강조, 포커스 안됨)
-    static var selectionUnemphasized: Color {
-        Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
-    }
+    // MARK: - Editor
+
+    static var currentLineBackground: Color { currentTheme.currentLineBackground }
+    static var lineNumber: Color { currentTheme.lineNumber }
+
+    // MARK: - Accent & Focus
+
+    static var accent: Color { currentTheme.accent }
+    static var focusRing: Color { currentTheme.focusRing }
 
     // MARK: - Indicators
 
-    /// 수정됨 표시 색상
-    static var modifiedIndicator: Color {
-        Color(nsColor: .systemOrange)
-    }
-
-    /// 저장됨 표시 색상
-    static var savedIndicator: Color {
-        Color(nsColor: .systemGreen)
-    }
-
-    /// 오류 표시 색상
-    static var errorIndicator: Color {
-        Color(nsColor: .systemRed)
-    }
-
-    /// 경고 표시 색상
-    static var warningIndicator: Color {
-        Color(nsColor: .systemYellow)
-    }
+    static var modifiedIndicator: Color { currentTheme.modifiedIndicator }
+    static var savedIndicator: Color { currentTheme.savedIndicator }
+    static var errorIndicator: Color { currentTheme.errorIndicator }
+    static var warningIndicator: Color { currentTheme.warningIndicator }
 
     // MARK: - Shadows
 
-    /// 탭 그림자 (선택됨)
-    static var tabSelectedShadow: Color {
-        Color(nsColor: .shadowColor).opacity(0.3)
+    static var shadowDrop: Color { currentTheme.shadowDrop }
+
+    // MARK: - Buttons
+
+    static var addButtonIcon: Color { currentTheme.addButtonIcon }
+    static var addButtonHover: Color { currentTheme.addButtonHover }
+    static var addButtonPressed: Color { currentTheme.addButtonPressed }
+
+    // MARK: - NSColor (AppKit용)
+
+    /// 현재 테마의 NSColor 버전 (MarkdownFormatter 등에서 사용)
+    private static var currentNSColorTheme: (any ThemePaletteNSColor.Type)? {
+        currentTheme as? any ThemePaletteNSColor.Type
     }
 
-    /// 드롭 섀도우
-    static var shadowDrop: Color {
-        Color(nsColor: .shadowColor).opacity(0.2)
+    static var nsEditorText: NSColor {
+        currentNSColorTheme?.nsEditorText ?? .labelColor
     }
 
-    // MARK: - Focus
-
-    /// 포커스 링 - 악센트 색상의 투명 버전
-    static var focusRing: Color {
-        Color(nsColor: .keyboardFocusIndicatorColor).opacity(0.5)
+    static var nsMarkdownSyntax: NSColor {
+        currentNSColorTheme?.nsMarkdownSyntax ?? .tertiaryLabelColor
     }
 
-    // MARK: - Accent
-
-    /// 시스템 악센트 색상
-    static var accent: Color {
-        Color(nsColor: .controlAccentColor)
+    static var nsEditorBackground: NSColor {
+        currentNSColorTheme?.nsEditorBackground ?? .textBackgroundColor
     }
 }

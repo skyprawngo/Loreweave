@@ -61,6 +61,7 @@ struct SettingsView: View {
         }
         .navigationSplitViewStyle(.prominentDetail)
         .frame(minWidth: 600, minHeight: 400)
+        .background(ThemeAwareBackground(material: .contentBackground, blendingMode: .behindWindow))
     }
 }
 
@@ -72,6 +73,16 @@ struct GeneralSettingsView: View {
     @State private var appTheme = UserSettings.shared.appTheme
     @State private var permissionManager = PermissionManager.shared
     @State private var projectManager = ProjectManager.shared
+
+    /// 테마 변경 다이얼로그 표시 여부
+    @State private var showThemeChangeDialog = false
+    /// 선택된 새 테마 (다이얼로그 표시용)
+    @State private var pendingTheme: AppTheme?
+
+    /// 저장된 테마가 현재 적용된 테마와 다른지 확인
+    private var themeWillChangeOnRestart: Bool {
+        appTheme != ThemeManager.shared.appliedTheme
+    }
 
     var body: some View {
         Form {
@@ -87,14 +98,45 @@ struct GeneralSettingsView: View {
                 }
 
                 // 테마 설정
-                Picker(L10n.get("settings.theme"), selection: $appTheme) {
-                    ForEach(AppTheme.allCases) { theme in
-                        Text(theme.displayName).tag(theme)
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker(L10n.get("settings.theme"), selection: $appTheme) {
+                        ForEach(AppTheme.allCases) { theme in
+                            Text(theme.displayName).tag(theme)
+                        }
+                    }
+                    .onChange(of: appTheme) { oldValue, newValue in
+                        // 현재 적용된 테마와 다른 테마를 선택한 경우 다이얼로그 표시
+                        if newValue != ThemeManager.shared.appliedTheme {
+                            pendingTheme = newValue
+                            showThemeChangeDialog = true
+                        }
+                    }
+
+                    // 재시작 안내 문구
+                    if themeWillChangeOnRestart {
+                        Text(L10n.get("settings.theme.willApplyOnRestart"))
+                            .font(.caption)
+                            .foregroundStyle(AppColors.accent)
                     }
                 }
-                .onChange(of: appTheme) { _, newValue in
-                    UserSettings.shared.appTheme = newValue
-                    ThemeManager.shared.applyTheme(newValue)
+                .alert(L10n.get("settings.theme.changeTitle"), isPresented: $showThemeChangeDialog) {
+                    Button(L10n.common.cancel, role: .cancel) {
+                        // 테마 설정 저장 (다음 재시작 시 적용)
+                        if let theme = pendingTheme {
+                            UserSettings.shared.appTheme = theme
+                        }
+                        pendingTheme = nil
+                    }
+                    Button(L10n.get("settings.theme.quit"), role: .destructive) {
+                        // 테마 설정 저장 후 앱 종료
+                        if let theme = pendingTheme {
+                            UserSettings.shared.appTheme = theme
+                        }
+                        pendingTheme = nil
+                        NSApplication.shared.terminate(nil)
+                    }
+                } message: {
+                    Text(L10n.get("settings.theme.changeMessage"))
                 }
 
                 // 시작 동작 설정

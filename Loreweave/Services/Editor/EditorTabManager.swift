@@ -288,6 +288,27 @@ final class EditorTabManager {
         selectedTabIndex = selectedTabIndex > 0 ? selectedTabIndex - 1 : tabs.count - 1
     }
 
+    /// 탭 순서 이동
+    func moveTab(from sourceIndex: Int, to destinationIndex: Int) {
+        guard sourceIndex >= 0 && sourceIndex < tabs.count else { return }
+        guard destinationIndex >= 0 && destinationIndex < tabs.count else { return }
+        guard sourceIndex != destinationIndex else { return }
+
+        let movedTab = tabs.remove(at: sourceIndex)
+        tabs.insert(movedTab, at: destinationIndex)
+
+        // 선택된 탭 인덱스 조정
+        if selectedTabIndex == sourceIndex {
+            selectedTabIndex = destinationIndex
+        } else if sourceIndex < selectedTabIndex && destinationIndex >= selectedTabIndex {
+            selectedTabIndex -= 1
+        } else if sourceIndex > selectedTabIndex && destinationIndex <= selectedTabIndex {
+            selectedTabIndex += 1
+        }
+
+        notifyTabsChanged()
+    }
+
     /// 현재 탭 닫기
     func closeCurrentTab() {
         closeTab(at: selectedTabIndex)

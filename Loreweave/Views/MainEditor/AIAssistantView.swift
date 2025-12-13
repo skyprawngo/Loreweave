@@ -6,6 +6,119 @@
 //
 
 import SwiftUI
+import AppKit
+
+// MARK: - Visual Effect Background (데스크톱 배경을 비추는 vibrancy 효과)
+
+struct VisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+
+    init(
+        material: NSVisualEffectView.Material = .sidebar,
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+    ) {
+        self.material = material
+        self.blendingMode = blendingMode
+    }
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = KeyWindowTrackingVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
+    }
+}
+
+/// 윈도우의 key 상태를 추적하여 활성/비활성 상태를 올바르게 반영하는 NSVisualEffectView
+/// AppKit 에디터가 first responder를 가져가도 윈도우가 key window이면 활성 상태로 표시
+class KeyWindowTrackingVisualEffectView: NSVisualEffectView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupNotifications()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupNotifications()
+    }
+
+    private func setupNotifications() {
+        // 윈도우 key 상태 변경 알림 등록
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidResignKey),
+            name: NSWindow.didResignKeyNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateState()
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        guard let keyWindow = notification.object as? NSWindow,
+              keyWindow == self.window else { return }
+        state = .active
+    }
+
+    @objc private func windowDidResignKey(_ notification: Notification) {
+        guard let resignedWindow = notification.object as? NSWindow,
+              resignedWindow == self.window else { return }
+        state = .inactive
+    }
+
+    private func updateState() {
+        if window?.isKeyWindow == true {
+            state = .active
+        } else {
+            state = .inactive
+        }
+    }
+}
+
+// MARK: - Theme Aware Background (테마에 따라 투명/불투명 배경 자동 전환)
+
+struct ThemeAwareBackground: View {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+
+    init(
+        material: NSVisualEffectView.Material = .sidebar,
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+    ) {
+        self.material = material
+        self.blendingMode = blendingMode
+    }
+
+    var body: some View {
+        // 앱 시작 시 적용된 테마 기준으로 배경 결정 (런타임 중 변경되지 않음)
+        if ThemeManager.shared.isOpaqueTheme {
+            // 불투명 테마: 고정 배경색 사용
+            OpaqueTheme.background
+        } else {
+            // 반투명 테마: VisualEffect 사용
+            VisualEffectBackground(material: material, blendingMode: blendingMode)
+        }
+    }
+}
 
 // MARK: - AI Feedback Request Model
 
@@ -53,8 +166,6 @@ struct AIFeedbackRequest: Identifiable {
 // MARK: - AI Assistant View
 
 struct AIAssistantView: View {
-    var onToggle: (() -> Void)?
-
     @State private var requests: [AIFeedbackRequest] = []
     @State private var selectedType: AIFeedbackRequest.FeedbackType = .refine
     @State private var startLine: Int = 1
@@ -63,8 +174,8 @@ struct AIAssistantView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 헤더 (토글 버튼 포함)
-            AIAssistantHeader(onToggle: onToggle)
+            // 헤더
+            AIAssistantHeader()
 
             // 새 첨삭 요청 영역
             NewFeedbackRequestSection(
@@ -82,12 +193,7 @@ struct AIAssistantView: View {
                 FeedbackRequestList(requests: requests)
             }
         }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(AppColors.separator, lineWidth: 0.5)
-        )
+        .frame(maxHeight: .infinity)
     }
 
     private func submitRequest() {
@@ -120,8 +226,6 @@ struct AIAssistantView: View {
 // MARK: - Header
 
 struct AIAssistantHeader: View {
-    var onToggle: (() -> Void)?
-
     var body: some View {
         HStack {
             Image(systemName: "pencil.and.outline")
@@ -130,17 +234,6 @@ struct AIAssistantHeader: View {
                 .font(.headline)
 
             Spacer()
-
-            // 패널 닫기 버튼
-            if let onToggle = onToggle {
-                Button(action: onToggle) {
-                    Image(systemName: "sidebar.trailing")
-                        .font(.system(size: 14))
-                        .foregroundStyle(AppColors.toolbarIcon)
-                }
-                .buttonStyle(.plain)
-                .help(L10n.ai.togglePanel)
-            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -401,6 +494,6 @@ struct FeedbackRequestCard: View {
 }
 
 #Preview {
-    AIAssistantView(onToggle: {})
+    AIAssistantView()
         .frame(width: 350, height: 600)
 }

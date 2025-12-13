@@ -30,6 +30,7 @@ struct SidebarView: View {
                 .padding(8)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle(projectManager.currentProject?.name ?? "")
     }
 }

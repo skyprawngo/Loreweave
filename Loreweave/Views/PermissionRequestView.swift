@@ -97,6 +97,7 @@ struct PermissionRequestView: View {
         }
         .padding(40)
         .frame(width: 500, height: 550)
+        .background(ThemeAwareBackground(material: .contentBackground, blendingMode: .behindWindow))
     }
 
     private func requestCurrentPermission() {

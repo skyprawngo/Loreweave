@@ -28,6 +28,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
     case system = "system"
     case light = "light"
     case dark = "dark"
+    case opaque = "opaque"
 
     var id: String { rawValue }
 
@@ -36,6 +37,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .system: return L10n.get("settings.theme.system")
         case .light: return L10n.get("settings.theme.light")
         case .dark: return L10n.get("settings.theme.dark")
+        case .opaque: return L10n.get("settings.theme.opaque")
         }
     }
 }

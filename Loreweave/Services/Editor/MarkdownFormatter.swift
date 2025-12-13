@@ -30,10 +30,10 @@ final class MarkdownFormatter {
     // MARK: - Colors (NSColor for NSTextView)
 
     /// 에디터 기본 텍스트 색상
-    private static var editorTextColor: NSColor { NSColorTheme.editorText }
+    private static var editorTextColor: NSColor { AppColors.nsEditorText }
 
     /// 마크다운 구문 색상
-    private static var markdownSyntaxColor: NSColor { NSColorTheme.markdownSyntax }
+    private static var markdownSyntaxColor: NSColor { AppColors.nsMarkdownSyntax }
 
     // MARK: - Parsing
 
