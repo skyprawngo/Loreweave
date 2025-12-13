@@ -13,6 +13,8 @@ struct TabBarView: View {
 
     @State private var isAddButtonHovered = false
     @State private var isAddButtonPressed = false
+    @State private var draggingTabId: UUID?
+    @State private var dragOverTabId: UUID?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -24,9 +26,22 @@ struct TabBarView: View {
                         justSaved: tab.justSaved,
                         isSelected: tabManager.selectedTabIndex == index,
                         fileExists: tab.fileExists,
+                        isDragging: draggingTabId == tab.id,
+                        isDragOver: dragOverTabId == tab.id,
                         onSelect: { tabManager.selectTab(at: index) },
                         onClose: { tabManager.closeTab(at: index) }
                     )
+                    .onDrag {
+                        draggingTabId = tab.id
+                        return NSItemProvider(object: tab.id.uuidString as NSString)
+                    }
+                    .onDrop(of: [.text], delegate: TabDropDelegate(
+                        tabId: tab.id,
+                        tabIndex: index,
+                        tabManager: tabManager,
+                        draggingTabId: $draggingTabId,
+                        dragOverTabId: $dragOverTabId
+                    ))
                 }
 
                 Button(action: { showNewFileDialog() }) {
@@ -60,7 +75,11 @@ struct TabBarView: View {
                 Divider()
             }
         }
-        .environment(\.controlActiveState, .key)
+        .onChange(of: tabManager.tabs) { _, _ in
+            // 탭 목록이 변경되면 드래그 상태 초기화
+            draggingTabId = nil
+            dragOverTabId = nil
+        }
     }
 
     @ViewBuilder
@@ -86,6 +105,8 @@ struct TabItemView: View {
     let justSaved: Bool
     let isSelected: Bool
     let fileExists: Bool
+    var isDragging: Bool = false
+    var isDragOver: Bool = false
     let onSelect: () -> Void
     let onClose: () -> Void
 
@@ -94,14 +115,12 @@ struct TabItemView: View {
     /// 저장 완료 점 표시 여부 (애니메이션용)
     @State private var showSavedIndicator = false
 
-    /// 탭 배경색 (글래스모피즘 스타일)
+    /// 탭 배경색 (선택되지 않은 탭용)
     private var tabBackgroundColor: Color {
-        if isSelected {
-            return AppColors.tabSelectedBackground
-        } else if isHovering {
+        if isHovering {
             return AppColors.tabHoverBackground
         } else {
-            return AppColors.tabDefaultBackground
+            return AppColors.tabSelectedBackground // 기본 배경을 기존 선택 배경으로
         }
     }
 
@@ -172,14 +191,20 @@ struct TabItemView: View {
         .padding(.vertical, 8)
         .background(
             Capsule()
-                .fill(tabBackgroundColor)
-                .shadow(color: isSelected ? AppColors.tabSelectedShadow : Color.clear, radius: 1, y: 0.5)
+                .fill(isSelected ? Color.clear : tabBackgroundColor)
         )
-        .overlay(
-            Capsule()
-                .strokeBorder(tabBorderColor, lineWidth: 0.5)
-        )
+        .glassEffect(isSelected ? .regular : .clear, in: .capsule)
         .contentShape(Capsule())
+        .opacity(isDragging ? 0.5 : 1.0)
+        .overlay(alignment: .leading) {
+            // 드롭 위치 표시 인디케이터
+            if isDragOver {
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 2)
+                    .offset(x: -1)
+            }
+        }
         .onTapGesture(perform: onSelect)
         .onHover { hovering in
             isHovering = hovering
@@ -197,6 +222,52 @@ struct TabItemView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Tab Drop Delegate
+
+struct TabDropDelegate: DropDelegate {
+    let tabId: UUID
+    let tabIndex: Int
+    let tabManager: EditorTabManager
+    @Binding var draggingTabId: UUID?
+    @Binding var dragOverTabId: UUID?
+
+    func dropEntered(info: DropInfo) {
+        // 드래그 중인 탭이 자기 자신이면 무시
+        guard draggingTabId != tabId else { return }
+        dragOverTabId = tabId
+    }
+
+    func dropExited(info: DropInfo) {
+        dragOverTabId = nil
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let draggingId = draggingTabId else { return false }
+        guard let sourceIndex = tabManager.tabs.firstIndex(where: { $0.id == draggingId }) else { return false }
+
+        // 드롭 위치 계산
+        let destinationIndex = tabIndex
+
+        if sourceIndex != destinationIndex {
+            tabManager.moveTab(from: sourceIndex, to: destinationIndex)
+        }
+
+        // 상태 초기화
+        draggingTabId = nil
+        dragOverTabId = nil
+
+        return true
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        return draggingTabId != nil && draggingTabId != tabId
     }
 }
 

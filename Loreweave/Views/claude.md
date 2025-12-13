@@ -33,20 +33,34 @@ macOS 네이티브 앱과 일관된 UI를 위해 다음 원칙을 따릅니다.
   - 선택 시 배경: `AppColors.toolbarToggleSelected`
   - 모서리: `RoundedRectangle(cornerRadius: 4)`
 
-### 글래스모피즘 탭 스타일 (TabItemView 참고)
+### Liquid Glass 효과 (macOS 26.0+)
+
+**`.glassEffect()` 모디파이어 사용** - macOS Tahoe의 네이티브 글래스 효과
 
 ```swift
-// 선택됨
-AppColors.tabSelectedBackground + shadow(AppColors.tabSelectedShadow)
+// 기본 글래스 효과 (NavigationButtonsView)
+.glassEffect()
 
-// 호버
-AppColors.tabHoverBackground
+// 캡슐 모양 글래스 효과 (TabItemView - 선택된 탭)
+.glassEffect(.regular, in: .capsule)
 
-// 기본 (비선택)
-AppColors.tabDefaultBackground
+// 조건부 적용 (선택 여부에 따라)
+.background(
+    Capsule()
+        .fill(isSelected ? Color.clear : tabBackgroundColor)
+)
+.glassEffect(isSelected ? .regular : .clear, in: .capsule)
+```
 
-// 테두리
-Capsule().strokeBorder(AppColors.tabSelectedBorder / tabDefaultBorder)
+### 탭 스타일 (TabItemView 참고)
+
+```swift
+// 선택된 탭: Liquid Glass 효과
+.glassEffect(.regular, in: .capsule)
+
+// 선택되지 않은 탭: 불투명 배경
+AppColors.tabSelectedBackground (기본)
+AppColors.tabHoverBackground (호버)
 ```
 
 ### 텍스트 필드
@@ -141,38 +155,112 @@ textView.textStorage?.setAttributedString(attributedString)
 
 ---
 
-## 디렉토리 구조
+## 뷰 계층 구조
 
 **윈도우 단위 뷰는 최상위에, 종속 뷰는 하위 폴더에 배치합니다.**
 
-## 배치 원칙
+### 배치 원칙
 
-- 독립적으로 동작하는 윈도우 뷰 (예: MainEditorView, WelcomeView)는 Views/ 루트에 배치
-- 상위 뷰에 종속된 하위 뷰들은 `{상위뷰명에서 View 제외}/` 폴더에 배치
-- 폴더명은 상위 뷰 이름에서 `View` 접미사를 제외한 형태
+- 독립적으로 동작하는 윈도우 뷰는 `Views/` 루트에 배치
+- 종속 뷰는 `{상위뷰명에서 View 제외}/` 폴더에 배치
 - 하위 폴더 안에서도 동일한 규칙 적용 (중첩 가능)
 
-## 구조 예시
+### 파일 구조 및 계층
 
 ```
 Views/
-├── MainEditorView.swift         # 메인 에디터 윈도우 (최상위)
-├── MainEditor/                  # MainEditorView의 하위 뷰들
-│   ├── SidebarView.swift
-│   ├── Sidebar/                 # SidebarView의 하위 뷰들
-│   │   ├── ProjectExplorerView.swift
-│   │   └── FileSystemItemRow.swift
-│   ├── TabBarView.swift
-│   ├── EditorView.swift
-│   ├── NavigationButtonsView.swift
-│   ├── ToolbarSearchField.swift
-│   └── AIAssistantView.swift
-├── WelcomeView.swift            # 시작 화면 윈도우 (최상위)
-└── SettingsView.swift           # 설정 윈도우 (최상위)
+├── MainEditorView.swift                    # 메인 윈도우
+│   └── MainEditor/
+│       ├── SidebarView.swift               # 좌측 사이드바
+│       │   └── Sidebar/
+│       │       ├── ProjectExplorerView.swift
+│       │       └── FileSystemItemRow.swift
+│       ├── EditorContainerView.swift       # 에디터 컨테이너
+│       │   └── EditorPanel/
+│       │       ├── EditorToolbarView.swift     # 서식 툴바
+│       │       └── CodeEditorWrapperView.swift # STTextView 래퍼
+│       │           └── ExtendedSTTextView      # Scroll Beyond Last Line
+│       ├── TabBarView.swift                # 탭바
+│       │   └── TabItemView
+│       ├── NavigationButtonsView.swift
+│       ├── SpotlightView.swift
+│       └── AIAssistantView.swift           # AI 첨삭 패널
+│           ├── AIAssistantHeader
+│           ├── NewFeedbackRequestSection
+│           └── FeedbackRequestList
+├── WelcomeView.swift                       # 시작 화면 윈도우
+└── SettingsView.swift                      # 설정 윈도우
 ```
 
-## 새 뷰 추가 시
+### 컴포넌트 역할
 
-1. 윈도우 레벨 뷰인지, 기존 뷰의 하위 컴포넌트인지 판단
-2. 윈도우 레벨이면 `Views/` 루트에 `{Name}View.swift` 생성
-3. 하위 컴포넌트면 해당 상위 뷰의 폴더에 배치 (폴더가 없으면 생성)
+| 컴포넌트 | 역할 |
+|---------|------|
+| `MainEditorView` | 메인 윈도우 - NavigationSplitView + AI패널 |
+| `SidebarView` | 프로젝트 탐색기 |
+| `EditorContainerView` | 탭바 + 툴바 + 에디터 + 상태바 |
+| `CodeEditorWrapperView` | STTextView 래퍼 - 줄번호, 하이라이트 |
+| `AIAssistantView` | AI 첨삭 패널 |
+
+### ExtendedSTTextView (Scroll Beyond Last Line)
+
+`CodeEditorWrapperView` 내부에서 VSCode의 "Editor: Scroll Beyond Last Line" 기능 구현:
+
+```swift
+private class ExtendedSTTextView: STTextView {
+    var extraScrollHeight: CGFloat = 0
+    private var actualContentHeight: CGFloat = 0
+
+    override func setFrameSize(_ newSize: NSSize) {
+        actualContentHeight = newSize.height
+        super.setFrameSize(NSSize(width: newSize.width, height: newSize.height + extraScrollHeight))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let locationInView = convert(event.locationInWindow, from: nil)
+        if locationInView.y > actualContentHeight {
+            if let textLength = attributedText?.length {
+                selectAndShow(NSRange(location: textLength, length: 0))
+            }
+            return
+        }
+        super.mouseDown(with: event)
+    }
+}
+```
+
+**핵심**: STTextView는 `setFrameSize`로 크기 결정 → 오버라이드로 `extraScrollHeight` 추가
+
+### 새 뷰 추가 시
+
+1. 윈도우 레벨 → `Views/` 루트에 `{Name}View.swift`
+2. 하위 컴포넌트 → 상위 뷰 폴더에 배치
+
+---
+
+## 테마 호환 배경 설정
+
+모든 뷰는 시스템/라이트/다크/불투명 테마와 호환되도록 `ThemeAwareBackground`를 사용합니다.
+
+### ThemeAwareBackground
+
+테마에 따라 투명/불투명 배경을 자동 전환하는 컴포넌트:
+- **시스템/라이트/다크 테마**: `VisualEffectBackground` (반투명)
+- **불투명 테마**: `OpaqueTheme.background` (고정 색상)
+
+```swift
+// 사이드바 영역
+.background(ThemeAwareBackground(material: .sidebar, blendingMode: .behindWindow))
+
+// 콘텐츠 영역
+.background(ThemeAwareBackground(material: .contentBackground, blendingMode: .behindWindow))
+```
+
+### 적용 대상
+
+독립 윈도우 뷰 및 주요 영역에 적용:
+- `WelcomeView` - 좌측(sidebar), 우측(contentBackground)
+- `PermissionRequestView` - contentBackground
+- `SettingsView` - contentBackground
+- `SidebarView` - sidebar
+- `AIAssistantView` - sidebar

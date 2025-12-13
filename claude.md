@@ -1,5 +1,10 @@
 # Loreweave 코딩 규칙
 
+## 빌드 요구사항
+
+- **최소 배포 타겟**: macOS 26.0 (Tahoe)
+- **이유**: Liquid Glass UI (`glassEffect()` 모디파이어) 사용
+
 ## 코드 설계 원칙
 
 ### 객체 재사용
@@ -17,21 +22,13 @@
 - 조건부 렌더링(`if isExpanded`)으로 lazy 로딩 구현
 - `@State`, `@Bindable` 등 적절한 프로퍼티 래퍼 선택
 
-### AppKit 사용 금지 (에디터 영역)
+### 에디터 텍스트뷰
 
-**에디터 영역에서 `NSViewRepresentable`, `NSViewControllerRepresentable` 사용 금지**
+**STTextView 라이브러리 사용** (krzyzanowskim/STTextView)
 
-```swift
-// 금지 - NavigationSplitView detail 영역에서 비활성 상태로 렌더링됨
-struct MyView: NSViewRepresentable { ... }
-struct MyViewController: NSViewControllerRepresentable { ... }
-
-// 권장 - 순수 SwiftUI 컴포넌트 사용
-TextEditor(text: $text)
-TextField("", text: $text)
-```
-
-**이유**: `NavigationSplitView`의 detail 영역에서 AppKit 래퍼(`NSViewRepresentable`)를 사용하면 컨트롤이 비활성(회색) 상태로 렌더링되는 버그 발생. 순수 SwiftUI 컴포넌트만 사용해야 정상 표시됨.
+- 줄번호(gutter), 현재 줄 하이라이트 지원
+- `CodeEditorWrapperView`에서 `NSViewRepresentable`로 래핑
+- 폰트/줄간격 설정은 `defaultParagraphStyle`과 `attributedText`에 동시 적용 필요
 
 ## 다국어 지원
 
@@ -96,12 +93,12 @@ Color(nsColor: .secondaryLabelColor)
 
 ```
 MainEditorView
-├── SidebarView (좌측)
-├── EditorContainerView (중앙) - 여러 EditorPanelView 관리
-│   └── EditorPanelView (1개 이상)
+├── NavigationSplitView
+│   ├── SidebarView (좌측)
+│   └── EditorContainerView (중앙)
 │       ├── TabBarView
 │       ├── EditorToolbarView
-│       ├── TextEditorView
+│       ├── CodeEditorWrapperView (STTextView 래퍼)
 │       └── EditorStatusBarView
 └── AIAssistantView (우측)
 ```
@@ -111,24 +108,24 @@ MainEditorView
 | 컴포넌트 | 위치 | 역할 |
 |---------|------|------|
 | `MainEditorView` | `Views/` | 메인 에디터 윈도우 |
-| `EditorContainerView` | `Views/MainEditor/` | 여러 EditorPanel 관리 (향후 분할 뷰 지원) |
-| `EditorPanelView` | `Views/MainEditor/EditorPanel/` | 단일 에디터 영역 (탭바+툴바+에디터+상태바) |
-| `EditorToolbarView` | `Views/MainEditor/EditorPanel/` | 서식 툴바 (볼드, 정렬, 폰트 크기 등) |
-| `TextEditorView` | `Views/MainEditor/EditorPanel/` | 순수 SwiftUI TextEditor (줄번호 포함) |
-| `EditorStatusBarView` | `Views/MainEditor/EditorPanel/` | 상태바 (글자수, 줄수 등) |
+| `EditorContainerView` | `Views/MainEditor/` | 에디터 영역 (탭바+툴바+에디터+상태바) |
+| `CodeEditorWrapperView` | `Views/MainEditor/EditorPanel/` | STTextView 래퍼 (줄번호, 하이라이트) |
+| `EditorToolbarView` | `Views/MainEditor/EditorPanel/` | 서식 툴바 (볼드, 폰트 크기, 줄간격) |
+| `EditorStatusBarView` | `Views/MainEditor/EditorContainerView.swift` | 상태바 (글자수, 줄수) |
 | `EditorTabManager` | `Services/Editor/` | 탭 상태 관리 (싱글톤) |
+
+### 에디터 설정
+
+- **폰트 크기**: `UserSettings.shared.editorFontSize` - 거터와 에디터 텍스트에 동시 적용
+- **줄간격**: `lineHeightMultiple` 사용 (1.0 = 100% 기본값, 추가 간격 없음)
+  - 옵션: 100%(1.0), 125%(1.25), 150%(1.5), 200%(2.0)
 
 ### 탭 열기 흐름
 
 1. 사이드바(`ProjectExplorerView`)에서 파일 클릭
 2. `EditorTabManager.openFile()` 호출
 3. `TabBarView`에 탭 표시 (이미 열린 파일이면 해당 탭 선택)
-4. `EditorPanelView` → `TextEditorView`에서 파일 내용 로드 및 표시
-
-### 확장 가능 구조
-
-- `EditorContainerView`는 향후 분할 뷰(수평/수직) 지원 가능
-- `EditorPanelView`는 독립적인 탭 그룹으로 동작 가능
+4. `EditorContainerView` → `CodeEditorWrapperView`에서 파일 내용 로드 및 표시
 
 ## 앱 시작 동작
 

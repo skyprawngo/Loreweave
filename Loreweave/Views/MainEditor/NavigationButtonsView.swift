@@ -59,6 +59,8 @@ struct NavigationButtonsView: View {
             .help(L10n.get("toolbar.goForward"))
         }
         .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .glassEffect()
     }
 
     @ViewBuilder
