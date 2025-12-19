@@ -22,6 +22,7 @@ struct EditorContainerView: View {
     @State private var fontSize: CGFloat = UserSettings.shared.editorFontSize
     @State private var fontName: String = UserSettings.shared.editorFontName
     @State private var lineSpacingOption: LineSpacingOption = .normal
+    @State private var letterSpacing: CGFloat = 0
     @State private var cursorLine: Int = 1
     @State private var pendingFormatAction: MarkdownFormatType?
     @State private var selectedLineRange: ClosedRange<Int>?
@@ -50,6 +51,7 @@ struct EditorContainerView: View {
                 EditorToolbarView(
                     fontSize: $fontSize,
                     lineSpacingOption: $lineSpacingOption,
+                    letterSpacing: $letterSpacing,
                     fontName: $fontName,
                     onFormatAction: { formatType in
                         pendingFormatAction = formatType
@@ -66,6 +68,7 @@ struct EditorContainerView: View {
                     fontSize: fontSize,
                     fontName: fontName,
                     lineHeightMultiple: lineSpacingOption.rawValue,
+                    letterSpacing: letterSpacing,
                     isEditable: currentFileExists
                 )
                 .background(AppColors.textEditorBackground)

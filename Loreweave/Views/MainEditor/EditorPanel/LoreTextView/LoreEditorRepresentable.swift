@@ -18,6 +18,7 @@ struct LoreEditorRepresentable: NSViewRepresentable {
     let fontSize: CGFloat
     let fontName: String
     let lineHeightMultiple: CGFloat
+    let letterSpacing: CGFloat
     let isEditable: Bool
 
     // MARK: - NSViewRepresentable
@@ -27,6 +28,7 @@ struct LoreEditorRepresentable: NSViewRepresentable {
         config.fontSize = fontSize
         config.fontName = fontName
         config.lineHeightMultiple = lineHeightMultiple
+        config.letterSpacing = letterSpacing
 
         let state = EditorState(text: text, configuration: config)
         state.isEditable = isEditable
@@ -79,6 +81,11 @@ struct LoreEditorRepresentable: NSViewRepresentable {
             configChanged = true
         }
 
+        if state.configuration.letterSpacing != letterSpacing {
+            state.setLetterSpacing(letterSpacing)
+            configChanged = true
+        }
+
         if state.isEditable != isEditable {
             state.isEditable = isEditable
         }
@@ -121,6 +128,7 @@ struct LoreEditorRepresentable: NSViewRepresentable {
         fontSize: 14,
         fontName: "SF Pro",
         lineHeightMultiple: 1.5,
+        letterSpacing: 0,
         isEditable: true
     )
     .frame(width: 600, height: 400)

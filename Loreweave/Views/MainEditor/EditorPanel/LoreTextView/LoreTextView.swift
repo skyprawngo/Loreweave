@@ -116,9 +116,10 @@ final class LoreTextView: NSView {
         lineRenderer.lineHeightMultiple = editorState.configuration.lineHeightMultiple
         lineRenderer.textColor = AppColors.nsEditorText
         lineRenderer.wordWrapEnabled = editorState.configuration.wordWrap
+        lineRenderer.letterSpacing = editorState.configuration.letterSpacing
 
         #if DEBUG
-        print("[LoreTextView] syncFromState - wordWrap: \(editorState.configuration.wordWrap), lineHeight: \(lineRenderer.lineHeight)")
+        print("[LoreTextView] syncFromState - wordWrap: \(editorState.configuration.wordWrap), lineHeight: \(lineRenderer.lineHeight), letterSpacing: \(lineRenderer.letterSpacing)")
         #endif
     }
 
@@ -743,10 +744,18 @@ final class LoreTextView: NSView {
         if event.keyCode == 51 {
             if event.modifierFlags.contains(.command) {
                 // Cmd+백스페이스: 행 시작까지 삭제
+                // 조합 중인 문자가 있으면 취소
+                if hasMarkedText() {
+                    unmarkText()
+                }
                 performDeleteToLineStart()
                 return
             } else if event.modifierFlags.contains(.option) {
                 // Option+백스페이스: 단어 단위 삭제
+                // 조합 중인 문자가 있으면 취소
+                if hasMarkedText() {
+                    unmarkText()
+                }
                 performDeleteWordBackward()
                 return
             }

@@ -80,6 +80,41 @@
   "ai.feedback.emptyDescription": "上記で行範囲と添削タイプを選択してリクエストしてください。",
   "ai.feedback.sampleResponse": "選択された部分を確認しました。文章の流れが自然で、全体的な文脈ともよく合っています。ただし、いくつかの表現をもう少し磨けば、読者により強い印象を与えることができるでしょう。",
 
+  "ai.assistant.inactive.title": "AIアシスタント",
+  "ai.assistant.inactive.description": "AIアシスタントを接続して、執筆作業のサポートを受けましょう。",
+  "ai.assistant.connect": "AIを接続",
+
+  "ai.setup.title": "AI選択",
+  "ai.setup.description": "使用するAI CLIを選択してください。",
+  "ai.setup.selectAI": "AI選択",
+  "ai.setup.selectPlaceholder": "AIを選択...",
+
+  "ai.install.checking": "CLI確認中...",
+  "ai.install.checkingDescription": "選択したAI CLIがインストールされているか確認しています。",
+  "ai.install.notInstalled": "{cli} CLI未インストール",
+  "ai.install.notInstalledDescription": "{cli} CLIがインストールされていません。下のボタンからインストールするか、手動でインストールしてください。",
+  "ai.install.auto": "自動インストール",
+  "ai.install.openPage": "インストールページを開く",
+  "ai.install.recheck": "再確認",
+  "ai.install.failed": "インストール失敗",
+  "ai.install.npmRequired": "Claude CLIのインストールにはnpmが必要です。先にNode.jsをインストールしてください。",
+
+  "ai.chat.user": "ユーザー",
+  "ai.chat.assistant": "アシスタント",
+  "ai.chat.system": "システム",
+  "ai.chat.thinking": "考え中...",
+  "ai.chat.streaming": "応答中...",
+  "ai.chat.empty": "会話がありません",
+  "ai.chat.emptyDescription": "下の入力欄にメッセージを入力してAIとの会話を始めましょう。",
+  "ai.chat.inputPlaceholder": "メッセージを入力...",
+  "ai.chat.send": "送信",
+  "ai.chat.cancel": "キャンセル",
+  "ai.chat.clearHistory": "履歴を削除",
+  "ai.chat.disconnect": "接続解除",
+
+  "ai.error.title": "エラー",
+  "common.retry": "再試行",
+
   "tabs.close": "閉じる",
   "tabs.newTab": "新しいタブ",
 

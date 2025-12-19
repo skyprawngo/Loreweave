@@ -70,6 +70,15 @@ final class LineRenderer {
         }
     }
 
+    /// 문자 간격 (kern)
+    var letterSpacing: CGFloat = 0 {
+        didSet {
+            if letterSpacing != oldValue {
+                invalidateAllCache()
+            }
+        }
+    }
+
     /// 계산된 기본 행 높이 (단일 줄)
     private(set) var lineHeight: CGFloat = 20
 
@@ -448,11 +457,17 @@ final class LineRenderer {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = wordWrapEnabled ? .byWordWrapping : .byClipping
 
-        let attributes: [NSAttributedString.Key: Any] = [
+        var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: textColor,
             .paragraphStyle: paragraphStyle
         ]
+
+        // 문자 간격 적용 (0이 아닌 경우)
+        if letterSpacing != 0 {
+            attributes[.kern] = letterSpacing
+        }
+
         return NSAttributedString(string: text, attributes: attributes)
     }
 
@@ -463,6 +478,7 @@ final class LineRenderer {
         hasher.combine(textColor)
         hasher.combine(Int(width))
         hasher.combine(wordWrapEnabled)
+        hasher.combine(Int(letterSpacing * 100))
         return hasher.finalize()
     }
 

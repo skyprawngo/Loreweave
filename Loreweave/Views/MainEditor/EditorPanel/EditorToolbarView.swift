@@ -45,6 +45,7 @@ private enum ToolbarConstants {
 struct EditorToolbarView: View {
     @Binding var fontSize: CGFloat
     @Binding var lineSpacingOption: LineSpacingOption
+    @Binding var letterSpacing: CGFloat
     @Binding var fontName: String
     var onFormatAction: ((MarkdownFormatType) -> Void)?
 
@@ -54,6 +55,7 @@ struct EditorToolbarView: View {
             FontPickerControl(fontName: $fontName, fontSize: $fontSize)
             FontSizeControl(fontSize: $fontSize)
             LineSpacingControl(lineSpacingOption: $lineSpacingOption)
+            LetterSpacingControl(letterSpacing: $letterSpacing)
             Spacer()
             aiToolsMenu
         }
@@ -400,12 +402,141 @@ enum LineSpacingOption: CGFloat, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Letter Spacing Control
+
+private struct LetterSpacingControl: View {
+    @Binding var letterSpacing: CGFloat
+    @State private var inputText: String = ""
+    @State private var dragState = LetterSpacingDragState()
+    @FocusState private var isFocused: Bool
+
+    // 문자 간격 범위
+    private static let minSpacing: CGFloat = -5
+    private static let maxSpacing: CGFloat = 20
+    private static let dragSensitivity: CGFloat = 0.2
+    private static let inputWidth: CGFloat = 22
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "character.textbox")
+                .font(.system(size: ToolbarConstants.smallIconFontSize))
+                .foregroundStyle(AppColors.toolbarIcon)
+
+            TextField("", text: $inputText)
+                .textFieldStyle(.plain)
+                .font(.system(size: ToolbarConstants.labelFontSize))
+                .foregroundStyle(AppColors.textPrimary)
+                .frame(width: Self.inputWidth)
+                .multilineTextAlignment(.trailing)
+                .focused($isFocused)
+                .onSubmit(applyValue)
+                .onChange(of: isFocused) { _, focused in
+                    handleFocusChange(focused)
+                }
+        }
+        .controlBackground()
+        .contentShape(Rectangle())
+        .gesture(dragGesture)
+        .onHover(perform: handleHover)
+        .onAppear { syncInputText() }
+        .onChange(of: letterSpacing) { _, _ in
+            if !dragState.isDragging && !isFocused {
+                syncInputText()
+            }
+        }
+        .help(L10n.get("editor.letterSpacing"))
+    }
+
+    // MARK: - Gestures
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                if !dragState.isDragging {
+                    dragState.startDragging(from: letterSpacing)
+                }
+                let delta = value.translation.width * Self.dragSensitivity
+                let newValue = clampSpacing(dragState.startValue + delta)
+                letterSpacing = newValue
+                inputText = formatValue(newValue)
+            }
+            .onEnded { _ in
+                dragState.endDragging()
+            }
+    }
+
+    // MARK: - Actions
+
+    private func handleFocusChange(_ focused: Bool) {
+        if focused {
+            inputText = formatValue(letterSpacing)
+        } else {
+            applyValue()
+        }
+    }
+
+    private func handleHover(_ hovering: Bool) {
+        guard !dragState.isDragging else { return }
+
+        if hovering {
+            NSCursor.resizeLeftRight.push()
+        } else {
+            NSCursor.pop()
+        }
+    }
+
+    private func applyValue() {
+        if let value = Double(inputText) {
+            letterSpacing = clampSpacing(CGFloat(value))
+        }
+        syncInputText()
+    }
+
+    private func syncInputText() {
+        inputText = formatValue(letterSpacing)
+    }
+
+    private func formatValue(_ value: CGFloat) -> String {
+        if value == 0 {
+            return "0"
+        } else if value == floor(value) {
+            return "\(Int(value))"
+        } else {
+            return String(format: "%.1f", value)
+        }
+    }
+
+    private func clampSpacing(_ value: CGFloat) -> CGFloat {
+        let clamped = min(Self.maxSpacing, max(Self.minSpacing, value))
+        return (clamped * 10).rounded() / 10  // 0.1 단위로 반올림
+    }
+}
+
+// MARK: - Letter Spacing Drag State
+
+private struct LetterSpacingDragState {
+    var isDragging = false
+    var startValue: CGFloat = 0
+
+    mutating func startDragging(from value: CGFloat) {
+        isDragging = true
+        startValue = value
+        NSCursor.resizeLeftRight.push()
+    }
+
+    mutating func endDragging() {
+        isDragging = false
+        NSCursor.pop()
+    }
+}
+
 // MARK: - Preview
 
 #Preview {
     EditorToolbarView(
         fontSize: .constant(14),
         lineSpacingOption: .constant(.normal),
+        letterSpacing: .constant(0),
         fontName: .constant("SF Pro")
     )
     .padding()

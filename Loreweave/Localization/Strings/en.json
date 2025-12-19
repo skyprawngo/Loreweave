@@ -80,6 +80,41 @@
   "ai.feedback.emptyDescription": "Select line range and feedback type above, then submit your request.",
   "ai.feedback.sampleResponse": "I've reviewed the selected section. The flow of sentences is natural and fits well with the overall context. However, refining some expressions could make a stronger impression on readers.",
 
+  "ai.assistant.inactive.title": "AI Assistant",
+  "ai.assistant.inactive.description": "Connect an AI assistant to help with your writing.",
+  "ai.assistant.connect": "Connect AI",
+
+  "ai.setup.title": "Select AI",
+  "ai.setup.description": "Choose an AI CLI to use.",
+  "ai.setup.selectAI": "Select AI",
+  "ai.setup.selectPlaceholder": "Select an AI...",
+
+  "ai.install.checking": "Checking CLI...",
+  "ai.install.checkingDescription": "Checking if the selected AI CLI is installed.",
+  "ai.install.notInstalled": "{cli} CLI Not Installed",
+  "ai.install.notInstalledDescription": "{cli} CLI is not installed. Please install it using the buttons below or manually.",
+  "ai.install.auto": "Auto Install",
+  "ai.install.openPage": "Open Install Page",
+  "ai.install.recheck": "Check Again",
+  "ai.install.failed": "Installation Failed",
+  "ai.install.npmRequired": "npm is required to install Claude CLI. Please install Node.js first.",
+
+  "ai.chat.user": "User",
+  "ai.chat.assistant": "Assistant",
+  "ai.chat.system": "System",
+  "ai.chat.thinking": "Thinking...",
+  "ai.chat.streaming": "Responding...",
+  "ai.chat.empty": "No conversations",
+  "ai.chat.emptyDescription": "Start a conversation with AI by typing a message below.",
+  "ai.chat.inputPlaceholder": "Type a message...",
+  "ai.chat.send": "Send",
+  "ai.chat.cancel": "Cancel",
+  "ai.chat.clearHistory": "Clear History",
+  "ai.chat.disconnect": "Disconnect",
+
+  "ai.error.title": "Error",
+  "common.retry": "Retry",
+
   "tabs.close": "Close",
   "tabs.newTab": "New Tab",
 

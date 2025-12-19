@@ -139,6 +139,9 @@ final class UserSettings {
         static let aiAssistantPanelWidth = "userSettings.aiAssistantPanelWidth"
         static let sidebarWidth = "userSettings.sidebarWidth"
         static let appFontName = "userSettings.appFontName"
+        // AI 어시스턴트 설정
+        static let aiAssistantEnabled = "userSettings.aiAssistantEnabled"
+        static let aiAssistantCLIType = "userSettings.aiAssistantCLIType"
     }
 
     // MARK: - 일반 설정
@@ -514,6 +517,20 @@ final class UserSettings {
         set { defaults.set(Double(newValue), forKey: Keys.sidebarWidth) }
     }
 
+    // MARK: - AI 어시스턴트 설정
+
+    /// AI 어시스턴트 활성화 여부
+    var aiAssistantEnabled: Bool {
+        get { defaults.object(forKey: Keys.aiAssistantEnabled) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.aiAssistantEnabled) }
+    }
+
+    /// 선택된 AI CLI 타입 (rawValue 저장)
+    var aiAssistantCLIType: String {
+        get { defaults.string(forKey: Keys.aiAssistantCLIType) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.aiAssistantCLIType) }
+    }
+
     // MARK: - 앱 전역 폰트 설정
 
     /// 앱 전역 폰트 이름 (에디터와 줄번호 제외)
@@ -558,7 +575,9 @@ final class UserSettings {
             Keys.maxRecentProjects,
             Keys.aiAssistantPanelWidth,
             Keys.sidebarWidth,
-            Keys.appFontName
+            Keys.appFontName,
+            Keys.aiAssistantEnabled,
+            Keys.aiAssistantCLIType
         ]
 
         for key in allKeys {
