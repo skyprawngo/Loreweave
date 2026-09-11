@@ -6,12 +6,15 @@
 //
 
 import Foundation
+import AppKit
+import CryptoKit
 
 // MARK: - Notification Names
 
 extension Notification.Name {
     /// 에디터 탭이 변경됨 (추가, 삭제, 선택 변경 등)
     static let editorTabsDidChange = Notification.Name("editorTabsDidChange")
+    static let editorWillPerformFileOperation = Notification.Name("editorWillPerformFileOperation")
 }
 
 // MARK: - Tab State (저장용)
@@ -20,10 +23,17 @@ extension Notification.Name {
 struct TabState: Codable {
     let relativePath: String  // 프로젝트 폴더 기준 상대 경로
     let isModified: Bool
+    let cursorLine: Int       // 커서 행 위치
+    let cursorColumn: Int     // 커서 열 위치
+    var draftContent: String?
+    var baseContent: String?
+    var externalURL: URL?
 
-    init(relativePath: String, isModified: Bool = false) {
+    init(relativePath: String, isModified: Bool = false, cursorLine: Int = 0, cursorColumn: Int = 0) {
         self.relativePath = relativePath
         self.isModified = isModified
+        self.cursorLine = cursorLine
+        self.cursorColumn = cursorColumn
     }
 }
 
@@ -63,7 +73,7 @@ struct ProjectEditorSettings: Codable {
 /// 에디터에서 열린 파일 탭
 struct EditorTab: Identifiable, Equatable {
     let id: UUID
-    let fileItem: FileSystemItem
+    var fileItem: FileSystemItem
     var isModified: Bool
     /// 방금 저장됨 표시 (애니메이션용)
     var justSaved: Bool = false
@@ -92,6 +102,32 @@ struct EditorTab: Identifiable, Equatable {
     }
 }
 
+/// 탭별 편집 상태를 통합 관리하는 구조체
+struct TabEditState {
+    /// 편집 중인 텍스트
+    var content: String
+    /// 디스크에 저장된 원본 내용 (수정 여부 판단 기준)
+    var originalContent: String
+    /// 커서 위치 (line, column)
+    var cursorPosition: (line: Int, column: Int)
+
+    /// 수정 여부 (content와 originalContent 비교)
+    var isModified: Bool {
+        content != originalContent
+    }
+
+    init(content: String = "", originalContent: String = "", cursorPosition: (line: Int, column: Int) = (0, 0)) {
+        self.content = content
+        self.originalContent = originalContent
+        self.cursorPosition = cursorPosition
+    }
+
+    /// 저장 완료 후 호출 - originalContent를 현재 content로 업데이트
+    mutating func markAsSaved() {
+        originalContent = content
+    }
+}
+
 /// 에디터 탭 관리자
 @Observable
 final class EditorTabManager {
@@ -100,8 +136,9 @@ final class EditorTabManager {
     /// 현재 열린 탭들
     private(set) var tabs: [EditorTab] = []
 
-    /// 탭별 텍스트 캐시 (URL -> 편집 중인 텍스트)
-    private var textCache: [URL: String] = [:]
+    /// 탭별 편집 상태 (URL -> TabEditState)
+    /// 텍스트, 원본 내용, 커서, 스크롤을 통합 관리
+    private var editStates: [URL: TabEditState] = [:]
 
     /// 현재 선택된 탭 인덱스
     var selectedTabIndex: Int = 0 {
@@ -119,9 +156,18 @@ final class EditorTabManager {
 
     /// 세션 저장 필요 시 저장 (순환 호출 방지)
     private var isSavingSession = false
+    private var sessionProjectURL: URL?
+    private var recoveryWork: DispatchWorkItem?
+    var saveErrors: [URL: String] = [:]
+    var lastSavedAt: [URL: Date] = [:]
+    var recoveryError: String?
+    private var approvedDiscards: Set<URL> = []
+    private var navigation: [URL] = []
+    private var navigationIndex = -1
+    private var navigating = false
     private func autoSaveSessionIfNeeded() {
         guard !isSavingSession else { return }
-        guard let projectPath = ProjectManager.shared.currentProject?.path else { return }
+        guard let projectPath = sessionProjectURL else { return }
         isSavingSession = true
         saveSession(to: projectPath)
         isSavingSession = false
@@ -133,7 +179,17 @@ final class EditorTabManager {
         return tabs[selectedTabIndex]
     }
 
-    private init() {}
+    private let recoveryDirectory: URL
+
+    init(recoveryDirectory: URL? = nil) {
+        self.recoveryDirectory = recoveryDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Loreweave/Recovery", isDirectory: true)
+    }
+
+    private func localSessionURL(for project: URL) -> URL {
+        let digest = SHA256.hash(data: Data(project.standardizedFileURL.path.utf8)).map { String(format: "%02x", $0) }.joined()
+        return recoveryDirectory.appendingPathComponent(digest + ".json")
+    }
 
     // MARK: - Tab Operations
 
@@ -158,25 +214,15 @@ final class EditorTabManager {
     ///   - index: 닫을 탭 인덱스
     ///   - force: true이면 수정 여부와 관계없이 강제 닫기
     func closeTab(at index: Int, force: Bool = false) {
-        guard index >= 0 && index < tabs.count else { return }
-
-        // TODO: force가 false이고 수정된 파일이면 저장 여부 묻기
-
-        // 캐시에서 해당 탭 내용 삭제
-        let tabURL = tabs[index].url
-        removeCachedContent(for: tabURL)
-
+        guard tabs.indices.contains(index) else { return }
+        let id = tabs[index].id
+        guard force || prepareToClose([tabs[index]]) else { return }
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        removeCachedContent(for: tabs[index].url)
         tabs.remove(at: index)
-
-        // 선택된 탭 인덱스 조정
-        if tabs.isEmpty {
-            selectedTabIndex = 0
-        } else if selectedTabIndex >= tabs.count {
-            selectedTabIndex = tabs.count - 1
-        } else if index < selectedTabIndex {
-            selectedTabIndex -= 1
-        }
-
+        if tabs.isEmpty { selectedTabIndex = 0 }
+        else if selectedTabIndex >= tabs.count { selectedTabIndex = tabs.count - 1 }
+        else if index < selectedTabIndex { selectedTabIndex -= 1 }
         notifyTabsChanged()
     }
 
@@ -229,71 +275,122 @@ final class EditorTabManager {
 
     /// 특정 탭의 내용 저장
     func saveTab(at index: Int, content: String) -> Bool {
-        guard index >= 0 && index < tabs.count else { return false }
-
-        let tab = tabs[index]
-        let url = tab.url
-
+        guard tabs.indices.contains(index), let state = editStates[tabs[index].url] else { return false }
+        let url = tabs[index].url
         do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
+            try DocumentFileStore.save(content, at: url, expected: state.originalContent)
+            editStates[url]?.content = content
+            editStates[url]?.markAsSaved()
             tabs[index].isModified = false
             tabs[index].justSaved = true
-
-            // 일정 시간 후 justSaved 상태 해제
-            let tabId = tabs[index].id
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                if let index = self?.tabs.firstIndex(where: { $0.id == tabId }) {
-                    self?.tabs[index].justSaved = false
-                }
+            saveErrors[url] = nil
+            lastSavedAt[url] = Date()
+            autoSaveSessionIfNeeded()
+            let id = tabs[index].id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                if let i = self?.tabs.firstIndex(where: { $0.id == id }) { self?.tabs[i].justSaved = false }
             }
             return true
         } catch {
-            print("Failed to save file: \(error)")
+            saveErrors[url] = error is DocumentFileStore.Failure ? L10n.get("storage.conflict") : error.localizedDescription
+            autoSaveSessionIfNeeded()
             return false
         }
     }
 
     /// URL로 탭의 수정 상태 확인
     func isModified(url: URL) -> Bool {
-        guard let index = findTab(with: url) else { return false }
-        return tabs[index].isModified
+        return editStates[url]?.isModified ?? false
+    }
+
+    // MARK: - Edit State Management (통합 캐시 관리)
+
+    /// URL의 전체 편집 상태 가져오기
+    func getEditState(for url: URL) -> TabEditState? {
+        return editStates[url]
+    }
+
+    /// URL의 편집 상태 설정 (없으면 생성)
+    func setEditState(_ state: TabEditState, for url: URL) {
+        editStates[url] = state
+        if let index = findTab(with: url) { tabs[index].isModified = state.isModified }
+    }
+
+    /// URL의 편집 상태 삭제
+    func removeEditState(for url: URL) {
+        editStates.removeValue(forKey: url)
     }
 
     /// URL로 캐시된 탭 내용 가져오기
     func getCachedContent(for url: URL) -> String? {
-        return textCache[url]
+        return editStates[url]?.content
     }
 
-    /// 탭 내용을 캐시에 저장
+    /// 탭 내용을 캐시에 저장 (편집 상태가 없으면 생성)
     func setCachedContent(_ content: String, for url: URL) {
-        textCache[url] = content
+        guard findTab(with: url) != nil else { return }
+        if editStates[url] != nil {
+            editStates[url]?.content = content
+        } else {
+            editStates[url] = TabEditState(content: content, originalContent: content)
+        }
+        if let index = findTab(with: url) { tabs[index].isModified = editStates[url]?.isModified ?? false }
+        recoveryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.autoSaveSessionIfNeeded() }
+        recoveryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
-    /// 캐시에서 탭 내용 삭제
+    /// 원본 콘텐츠 설정 (파일 로드 시 사용)
+    func setOriginalContent(_ content: String, for url: URL) {
+        if editStates[url] != nil {
+            editStates[url]?.originalContent = content
+        } else {
+            editStates[url] = TabEditState(content: content, originalContent: content)
+        }
+        // 탭의 isModified 상태 동기화
+        if let index = findTab(with: url) {
+            tabs[index].isModified = editStates[url]?.isModified ?? false
+        }
+    }
+
+    /// 캐시에서 탭 내용 삭제 (레거시 호환)
     func removeCachedContent(for url: URL) {
-        textCache.removeValue(forKey: url)
+        removeEditState(for: url)
+    }
+
+    /// URL로 캐시된 커서 위치 가져오기
+    func getCachedCursorPosition(for url: URL) -> (line: Int, column: Int)? {
+        return editStates[url]?.cursorPosition
+    }
+
+    /// 커서 위치를 캐시에 저장
+    func setCachedCursorPosition(line: Int, column: Int, for url: URL) {
+        if editStates[url] != nil {
+            editStates[url]?.cursorPosition = (line, column)
+        } else {
+            editStates[url] = TabEditState(cursorPosition: (line, column))
+        }
     }
 
     /// 모든 탭 닫기
-    func closeAllTabs() {
-        // TODO: 수정된 파일들 저장 여부 묻기
-        textCache.removeAll()
+    @discardableResult
+    func closeAllTabs(force: Bool = false) -> Bool {
+        guard force || prepareToClose(tabs) else { return false }
+        editStates.removeAll()
         tabs.removeAll()
         selectedTabIndex = 0
         notifyTabsChanged()
+        return true
     }
 
     /// 현재 탭 외 모든 탭 닫기
     func closeOtherTabs(except index: Int) {
-        guard index >= 0 && index < tabs.count else { return }
-        let tabToKeep = tabs[index]
-
-        // 유지할 탭 외의 캐시 삭제
-        for tab in tabs where tab.url != tabToKeep.url {
-            removeCachedContent(for: tab.url)
-        }
-
-        tabs = [tabToKeep]
+        guard tabs.indices.contains(index) else { return }
+        let keep = tabs[index]
+        guard prepareToClose(tabs.filter { $0.id != keep.id }) else { return }
+        for tab in tabs where tab.id != keep.id { removeEditState(for: tab.url) }
+        tabs = [keep]
         selectedTabIndex = 0
         notifyTabsChanged()
     }
@@ -356,16 +453,116 @@ final class EditorTabManager {
     /// 현재 탭 저장 (EditorView에서 내용을 전달받아 저장)
     /// 주의: EditorView와 연동 필요
     func saveCurrentTab() {
-        // TODO: EditorView의 현재 텍스트 내용을 가져와서 저장해야 함
-        // 현재는 수정 플래그만 초기화
-        guard selectedTabIndex >= 0 && selectedTabIndex < tabs.count else { return }
-        // EditorView에서 직접 saveTab(at:content:) 호출하도록 구현 필요
+        flushEditor()
+        guard let tab = selectedTab, let content = getCachedContent(for: tab.url) else { return }
+        if !saveTab(at: selectedTabIndex, content: content) { showSaveError(for: tab.url) }
+    }
+
+    func goBack() { navigate(to: navigationIndex - 1) }
+    func goForward() { navigate(to: navigationIndex + 1) }
+    private func navigate(to index: Int) {
+        guard navigation.indices.contains(index) else { return }
+        navigating = true
+        navigationIndex = index
+        openFile(FileSystemItem(url: navigation[index], isDirectory: false))
+        navigating = false
+    }
+
+    func flushEditor() {
+        NotificationCenter.default.post(name: .editorWillPerformFileOperation, object: nil)
+    }
+
+    /// Resolve all decisions before removing any drafts. Cancel keeps the workspace intact.
+    func prepareToClose(_ candidates: [EditorTab]) -> Bool {
+        flushEditor()
+        approvedDiscards.removeAll()
+        var discard: [URL] = []
+        for candidate in candidates {
+            guard let index = tabs.firstIndex(where: { $0.id == candidate.id }), tabs[index].isModified else { continue }
+            let url = tabs[index].url
+            let alert = NSAlert()
+            alert.messageText = L10n.get("app.quit.saveChangesTitle")
+            alert.informativeText = String(format: L10n.get("app.quit.saveChangesMessage"), candidate.title)
+            alert.addButton(withTitle: L10n.get("app.quit.save"))
+            alert.addButton(withTitle: L10n.get("app.quit.dontSave"))
+            alert.addButton(withTitle: L10n.common.cancel)
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                guard let content = getCachedContent(for: url), saveTab(at: index, content: content) else {
+                    showSaveError(for: url)
+                    return false
+                }
+            case .alertSecondButtonReturn: discard.append(url)
+            default: return false
+            }
+        }
+        approvedDiscards = Set(discard)
+        return true
+    }
+
+    func showSaveError(for url: URL) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L10n.get("storage.saveFailed")
+        alert.informativeText = saveErrors[url] ?? L10n.get("storage.saveFailed")
+        alert.addButton(withTitle: L10n.common.confirm)
+        alert.runModal()
+    }
+
+    func saveAs() {
+        flushEditor()
+        guard let tab = selectedTab, let content = getCachedContent(for: tab.url) else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = tab.title
+        panel.directoryURL = tab.url.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let target = panel.url else { return }
+        do {
+            if target == tab.url {
+                if !saveTab(at: selectedTabIndex, content: content) { showSaveError(for: tab.url) }
+                return
+            }
+            guard !tabs.contains(where: { $0.url == target }) else { throw DocumentFileStore.Failure.conflict }
+            if FileManager.default.fileExists(atPath: target.path) {
+                let base = try String(contentsOf: target, encoding: .utf8)
+                try DocumentFileStore.save(content, at: target, expected: base)
+            } else { try DocumentFileStore.create(content, at: target) }
+            relocateTabs(from: tab.url, to: target)
+            if let i = findTab(with: target) {
+                editStates[target]?.markAsSaved()
+                tabs[i].isModified = false
+                lastSavedAt[target] = Date()
+            }
+            autoSaveSessionIfNeeded()
+        } catch {
+            saveErrors[tab.url] = error.localizedDescription
+            showSaveError(for: tab.url)
+        }
+    }
+
+    func relocateTabs(from old: URL, to new: URL) {
+        for i in tabs.indices {
+            let source = tabs[i].url
+            guard DocumentFileStore.contains(source, in: old) else { continue }
+            let suffix = String(source.path.dropFirst(old.path.count))
+            let target = URL(fileURLWithPath: new.path + suffix)
+            let oldItem = tabs[i].fileItem
+            tabs[i].fileItem = FileSystemItem(url: target, isDirectory: oldItem.isDirectory)
+            editStates[target] = editStates.removeValue(forKey: source)
+            saveErrors[target] = saveErrors.removeValue(forKey: source)
+            lastSavedAt[target] = lastSavedAt.removeValue(forKey: source)
+        }
+        notifyTabsChanged()
     }
 
     // MARK: - Notifications
 
     /// 탭 변경 알림 전송 (AppKit 컴포넌트 업데이트용)
     private func notifyTabsChanged() {
+        if !navigating, let url = selectedTab?.url, (navigation.indices.contains(navigationIndex) ? navigation[navigationIndex] : nil) != url {
+            if navigationIndex + 1 < navigation.count { navigation = Array(navigation.prefix(navigationIndex + 1)) }
+            navigation.append(url)
+            navigationIndex = navigation.count - 1
+        }
         NotificationCenter.default.post(name: .editorTabsDidChange, object: nil)
         // 탭 변경 시 세션 자동 저장
         autoSaveSessionIfNeeded()
@@ -396,18 +593,27 @@ final class EditorTabManager {
     }
 
     /// 현재 탭 상태를 프로젝트에 저장
-    func saveSession(to projectURL: URL) {
+    func saveSession(to projectURL: URL, omittingApprovedDiscards: Bool = false) {
         // 탭 상태를 상대 경로로 변환
         let tabStates = tabs.compactMap { tab -> TabState? in
             let filePath = tab.url.path
             let projectPath = projectURL.path
 
             // 프로젝트 폴더 내 파일인지 확인
-            guard filePath.hasPrefix(projectPath) else { return nil }
+            let isExternal = !filePath.hasPrefix(projectPath + "/")
 
             // 상대 경로 계산
-            let relativePath = String(filePath.dropFirst(projectPath.count + 1))
-            return TabState(relativePath: relativePath, isModified: tab.isModified)
+            let relativePath = isExternal ? tab.url.lastPathComponent : String(filePath.dropFirst(projectPath.count + 1))
+            // 커서 위치 가져오기 (editStates에서)
+            let cursor = editStates[tab.url]?.cursorPosition ?? (0, 0)
+            var snapshot = TabState(relativePath: relativePath, isModified: tab.isModified, cursorLine: cursor.0, cursorColumn: cursor.1)
+            if isExternal { snapshot.externalURL = tab.url }
+            if let state = editStates[tab.url], state.isModified,
+               !(omittingApprovedDiscards && approvedDiscards.contains(tab.url)) {
+                snapshot.draftContent = state.content
+                snapshot.baseContent = state.originalContent
+            }
+            return snapshot
         }
 
         let sessionState = EditorSessionState(
@@ -420,54 +626,63 @@ final class EditorTabManager {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = .prettyPrinted
-            let data = try encoder.encode(sessionState)
-            try data.write(to: sessionFile)
+            // Keep a machine-local mirror even when a project volume becomes unavailable.
+            // Absolute external paths are restored only from this app-owned location.
+            try FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+            try encoder.encode(sessionState).write(to: localSessionURL(for: projectURL), options: .atomic)
+            let portableTabs = tabStates.filter { $0.externalURL == nil }
+            let selectedURL = selectedTab?.url
+            let portableIndex = portableTabs.firstIndex { projectURL.appendingPathComponent($0.relativePath) == selectedURL } ?? 0
+            let portable = EditorSessionState(tabs: portableTabs, selectedTabIndex: portableIndex)
+            try encoder.encode(portable).write(to: sessionFile, options: .atomic)
+            recoveryError = nil
         } catch {
-            print("Failed to save editor session: \(error)")
+            recoveryError = error.localizedDescription
         }
     }
 
     /// 프로젝트에서 탭 상태 복원
     func restoreSession(from projectURL: URL) {
-        let sessionFile = sessionFileURL(for: projectURL)
-
-        guard FileManager.default.fileExists(atPath: sessionFile.path) else {
-            return
-        }
-
-        do {
-            let data = try Data(contentsOf: sessionFile)
-            let sessionState = try JSONDecoder().decode(EditorSessionState.self, from: data)
-
-            // 기존 탭 모두 닫기
-            closeAllTabs()
-
-            // 저장된 탭 복원
-            for tabState in sessionState.tabs {
-                let fileURL = projectURL.appendingPathComponent(tabState.relativePath)
-
-                // 파일이 존재하는지 확인
-                guard FileManager.default.fileExists(atPath: fileURL.path) else {
-                    continue
-                }
-
-                // FileSystemItem 생성
-                let fileItem = FileSystemItem(url: fileURL, isDirectory: false)
-
-                // 탭 열기
-                let newTab = EditorTab(fileItem: fileItem, isModified: tabState.isModified)
-                tabs.append(newTab)
+        recoveryWork?.cancel()
+        isSavingSession = true
+        defer { isSavingSession = false }
+        sessionProjectURL = projectURL
+        recoveryError = nil
+        navigation.removeAll()
+        navigationIndex = -1
+        editStates.removeAll()
+        tabs.removeAll()
+        selectedTabIndex = 0
+        let local = localSessionURL(for: projectURL)
+        let portable = sessionFileURL(for: projectURL)
+        var decoded: EditorSessionState?
+        var trustedLocal = false
+        for file in [local, portable] where FileManager.default.fileExists(atPath: file.path) {
+            do {
+                decoded = try JSONDecoder().decode(EditorSessionState.self, from: Data(contentsOf: file))
+                trustedLocal = file == local
+                break
+            } catch {
+                recoveryError = error.localizedDescription
+                let archive = file.deletingPathExtension().appendingPathExtension("unreadable-" + UUID().uuidString + ".json")
+                try? FileManager.default.copyItem(at: file, to: archive)
             }
-
-            // 선택된 탭 인덱스 복원
-            if !tabs.isEmpty {
-                selectedTabIndex = min(sessionState.selectedTabIndex, tabs.count - 1)
-            }
-
-            notifyTabsChanged()
-        } catch {
-            print("Failed to restore editor session: \(error)")
         }
+        guard let session = decoded else { return }
+        for entry in session.tabs {
+            let url = (entry.externalURL ?? projectURL.appendingPathComponent(entry.relativePath)).standardizedFileURL
+            guard ((trustedLocal && entry.externalURL != nil) || (entry.externalURL == nil && DocumentFileStore.contains(url, in: projectURL))),
+                  FileManager.default.fileExists(atPath: url.path) || entry.draftContent != nil else { continue }
+            let tab = EditorTab(fileItem: FileSystemItem(url: url, isDirectory: false), isModified: entry.draftContent != nil)
+            tabs.append(tab)
+            if let draft = entry.draftContent, let base = entry.baseContent {
+                editStates[url] = TabEditState(content: draft, originalContent: base, cursorPosition: (entry.cursorLine, entry.cursorColumn))
+            } else {
+                setCachedCursorPosition(line: entry.cursorLine, column: entry.cursorColumn, for: url)
+            }
+        }
+        selectedTabIndex = max(0, min(session.selectedTabIndex, tabs.count - 1))
+        NotificationCenter.default.post(name: .editorTabsDidChange, object: nil)
     }
 
     // MARK: - Editor Settings Persistence
@@ -503,4 +718,49 @@ final class EditorTabManager {
             return nil
         }
     }
+
+    // MARK: - External File Change Detection
+
+    /// 파일이 외부에서 변경되었는지 확인
+    /// - Returns: 변경되었으면 true
+    func checkExternalChange(for url: URL) -> Bool {
+        guard let editState = editStates[url] else { return false }
+
+        do {
+            let currentDiskContent = try String(contentsOf: url, encoding: .utf8)
+            return currentDiskContent != editState.originalContent
+        } catch {
+            return false
+        }
+    }
+
+    /// 외부 변경 내용을 반영하고 변경된 줄 번호들을 반환
+    /// - Returns: 변경된 줄 번호들 (1-indexed)
+    func detectExternalChanges(for url: URL) -> Set<Int> {
+        guard let old = editStates[url]?.originalContent,
+              let new = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return DocumentFileStore.changedLines(from: old, to: new)
+    }
+
+    /// 외부 변경을 적용하고 originalContent 업데이트
+    func applyExternalChanges(for url: URL) {
+        do {
+            let currentDiskContent = try String(contentsOf: url, encoding: .utf8)
+
+            if editStates[url] != nil {
+                // 탭이 수정되지 않은 상태면 content도 업데이트
+                if !editStates[url]!.isModified {
+                    editStates[url]?.content = currentDiskContent
+                }
+                editStates[url]?.originalContent = currentDiskContent
+            } else {
+                editStates[url] = TabEditState(content: currentDiskContent, originalContent: currentDiskContent)
+            }
+        } catch {
+            print("Failed to apply external changes: \(error)")
+        }
+    }
+
+    /// LCS (Longest Common Subsequence) 계산
+    // Line comparison lives in DocumentFileStore and has bounded linear memory.
 }

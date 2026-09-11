@@ -14,6 +14,53 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Toolbar Search Field
+
+/// 툴바용 NSSearchField 래퍼
+struct ToolbarSearchField: NSViewRepresentable {
+    @Binding var text: String
+    var prompt: String
+    var onSearch: () -> Void = {}
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let searchField = NSSearchField()
+        searchField.placeholderString = prompt
+        searchField.delegate = context.coordinator
+        searchField.bezelStyle = .roundedBezel
+        searchField.focusRingType = .none
+        return searchField
+    }
+
+    func updateNSView(_ nsView: NSSearchField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSearch: onSearch)
+    }
+
+    class Coordinator: NSObject, NSSearchFieldDelegate {
+        @Binding var text: String
+
+        var onSearch: () -> Void
+        init(text: Binding<String>, onSearch: @escaping () -> Void) {
+            _text = text
+            self.onSearch = onSearch
+        }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) { onSearch(); return true }
+            return false
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let searchField = obj.object as? NSSearchField else { return }
+            text = searchField.stringValue
+        }
+    }
+}
+
 struct MainEditorView: View {
     @Bindable var projectManager: ProjectManager
     @EnvironmentObject var appCommands: AppCommands
@@ -22,57 +69,83 @@ struct MainEditorView: View {
     @State private var tabManager = EditorTabManager.shared
 
     // AI 패널 크기
-    private let aiPanelWidth: CGFloat = 350
+    @State private var aiPanelWidth = UserSettings.shared.aiAssistantPanelWidth
+    @State private var showingProjectSearch = false
+    @State private var showingNewProject = false
+    @State private var newProjectName = ""
+    @State private var newProjectDirectory: URL?
 
     // UI 상태
     @State private var isAIPanelVisible: Bool = true
+    @State private var isAIDetailView: Bool = false  // AI 패널 상세 뷰 모드
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var searchText: String = ""
-    @State private var isSpotlightExpanded: Bool = false
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // 메인 콘텐츠
-            HStack(spacing: 0) {
-                // 메인 콘텐츠 (NavigationSplitView)
-                NavigationSplitView(columnVisibility: $columnVisibility) {
-                    // 사이드바 (ProjectExplorerView)
-                    ProjectExplorerView()
-                        .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
-                } detail: {
-                    // 에디터 컨테이너
-                    EditorContainerView(projectManager: projectManager)
-                        .environmentObject(appCommands)
-                }
-                .navigationSplitViewStyle(.balanced)
-
-                // AI 첨삭 패널 (우측)
-                if isAIPanelVisible {
-                    AIAssistantView()
-                        .frame(width: aiPanelWidth)
-                        .ignoresSafeArea(.container, edges: .top)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
+        HStack(spacing: 0) {
+            // 메인 콘텐츠 (NavigationSplitView)
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                // 사이드바 (ProjectExplorerView)
+                ProjectExplorerView()
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
+            } detail: {
+                // 에디터 컨테이너
+                EditorContainerView(projectManager: projectManager)
+                    .environmentObject(appCommands)
             }
+            .navigationSplitViewStyle(.balanced)
 
-            // 스포트라이트 확장 오버레이
-            SpotlightOverlay(text: $searchText, isExpanded: $isSpotlightExpanded)
+            // AI 패널 (우측)
+            if isAIPanelVisible {
+                Rectangle().fill(AppColors.separator).frame(width: 5)
+                    .gesture(DragGesture().onChanged { value in
+                        aiPanelWidth = min(600, max(280, UserSettings.shared.aiAssistantPanelWidth - value.translation.width))
+                    }.onEnded { _ in UserSettings.shared.aiAssistantPanelWidth = aiPanelWidth })
+                AIAssistantView(
+                    projectFolderURL: projectManager.currentProject?.path,
+                    isInDetailView: $isAIDetailView
+                )
+                .frame(width: aiPanelWidth)
+                .ignoresSafeArea(.container, edges: .top)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .background(ThemeAwareBackground(material: .sidebar, blendingMode: .behindWindow))
         .ignoresSafeArea(.container, edges: .top)
         .animation(.easeInOut(duration: 0.25), value: isAIPanelVisible)
         .animation(.easeInOut(duration: 0.25), value: columnVisibility)
         .toolbar {
-            // 네비게이션 버튼
+            // 네비게이션 버튼 + 검색바
             ToolbarItemGroup(placement: .navigation) {
                 NavigationButtonsView(
                     onBack: { goBack() },
                     onForward: { goForward() }
                 )
+
+                // 검색바 (네비게이션 버튼 오른쪽에 배치, 간격 추가)
+                ToolbarSearchField(text: $searchText, prompt: L10n.get("toolbar.searchPlaceholder"), onSearch: { showingProjectSearch = true })
+                    .frame(minWidth: 180, maxWidth: 250)
+                    .padding(.leading, 12)
+                Button { showingProjectSearch = true } label: { Image(systemName: "magnifyingglass") }
+                    .help(L10n.get("search.project"))
             }
 
-            // AI 패널 토글 버튼
+            // AI 뒤로가기 버튼 (상세 뷰일 때만 표시)
             ToolbarItem(placement: .primaryAction) {
+                if isAIPanelVisible && isAIDetailView {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            isAIDetailView = false
+                        }
+                    }) {
+                        Label(L10n.get("ai.chat.backToList"), systemImage: "chevron.left")
+                    }
+                    .help(L10n.get("ai.chat.backToList"))
+                }
+            }
+
+            // AI 패널 토글 버튼 (가장 우측에 배치)
+            ToolbarItem(placement: .confirmationAction) {
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         isAIPanelVisible.toggle()
@@ -82,6 +155,37 @@ struct MainEditorView: View {
                 }
                 .help(L10n.ai.togglePanel)
             }
+        }
+        .sheet(isPresented: $showingProjectSearch) {
+            ProjectSearchView(projectURL: projectManager.currentProject?.path, query: searchText)
+        }
+        .alert(L10n.get("storage.operationFailed"), isPresented: Binding(
+            get: { fileSystemManager.operationError != nil },
+            set: { if !$0 { fileSystemManager.operationError = nil } }
+        )) {
+            Button(L10n.common.confirm) { fileSystemManager.operationError = nil }
+        } message: { Text(fileSystemManager.operationError ?? "") }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aiDraftAction"))) { notification in
+            if !isAIPanelVisible {
+                isAIPanelVisible = true
+                DispatchQueue.main.async { NotificationCenter.default.post(notification) }
+            }
+        }
+        .onReceive(appCommands.$newProjectRequested) { requested in
+            if requested {
+                appCommands.newProjectRequested = false
+                newProjectDirectory = projectManager.defaultSaveDirectory
+                showingNewProject = true
+            }
+        }
+        .sheet(isPresented: $showingNewProject) {
+            NewProjectSheet(projectName: $newProjectName, selectedDirectory: $newProjectDirectory, projectManager: projectManager) {
+                guard let directory = newProjectDirectory,
+                      projectManager.createProject(name: newProjectName, at: directory) != nil else { return }
+                showingNewProject = false
+                newProjectName = ""
+                initializeFileSystem()
+            } onCancel: { showingNewProject = false }
         }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .onAppear {
@@ -112,11 +216,11 @@ struct MainEditorView: View {
     // MARK: - Navigation
 
     private func goBack() {
-        // TODO: 이전 파일/위치로 이동
+        tabManager.goBack()
     }
 
     private func goForward() {
-        // TODO: 다음 파일/위치로 이동
+        tabManager.goForward()
     }
 }
 
@@ -185,7 +289,7 @@ struct AppCommandHandlerModifier: ViewModifier {
             // 파일/폴더 커맨드
             .onReceive(appCommands.$newFileRequested) { requested in
                 if requested {
-                    if let rootItem = fileSystemManager.projectRoot {
+                    if let rootItem = fileSystemManager.targetDirectoryForNewFile {
                         fileSystemManager.showNewFileDialog(in: rootItem) { _ in }
                     }
                     appCommands.newFileRequested = false
@@ -241,9 +345,6 @@ struct AppCommandHandlerModifier: ViewModifier {
 
     private func handleOpenProject() {
         guard let url = projectManager.showOpenPanel() else { return }
-
-        // 기존 프로젝트 닫기 (세션 저장 포함)
-        fileSystemManager.closeProject()
 
         // 새 프로젝트 열기 (openProjectFromFile 내부에서 세션 복원됨)
         if projectManager.openProjectFromFile(at: url) != nil {

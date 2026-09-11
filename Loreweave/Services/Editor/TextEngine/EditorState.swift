@@ -72,16 +72,20 @@ final class EditorState {
     /// 문서 버전 (변경 감지용)
     private var lastKnownVersion: Int = 0
 
+    /// 외부에서 변경된 줄 번호들 (1-indexed)
+    /// AI가 파일을 수정했을 때 해당 줄들이 여기에 저장됨
+    var externallyModifiedLines: Set<Int> = []
+
     // MARK: - Undo/Redo Properties
 
-    /// Undo 스택 (최대 100개)
+    /// Undo 스택
     var undoStack: [UndoAction] = []
 
     /// Redo 스택
     var redoStack: [UndoAction] = []
 
     /// 최대 히스토리 개수
-    let maxUndoHistoryCount = 100
+    let maxUndoHistoryCount = 1000
 
     /// 현재 그룹화 중인 텍스트 입력 (연속 타이핑 그룹화용)
     var pendingTextGroup: PendingTextGroup?
@@ -91,6 +95,12 @@ final class EditorState {
 
     /// Redo 가능 여부
     var canRedo: Bool { !redoStack.isEmpty }
+
+    /// Undo 스택 크기 (디버깅용)
+    var undoCount: Int { undoStack.count }
+
+    /// Redo 스택 크기 (디버깅용)
+    var redoCount: Int { redoStack.count }
 
     // MARK: - Initialization
 

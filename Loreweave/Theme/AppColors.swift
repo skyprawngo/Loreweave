@@ -18,7 +18,7 @@ enum AppColors {
 
     /// 현재 적용 중인 테마 타입 반환
     private static var currentTheme: any ThemePalette.Type {
-        switch UserSettings.shared.appTheme {
+        switch ThemeManager.shared.appliedTheme {
         case .system:
             return SystemTheme.self
         case .light:

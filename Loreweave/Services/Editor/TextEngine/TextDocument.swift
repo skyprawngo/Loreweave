@@ -131,11 +131,11 @@ final class TextDocument {
     /// (행, 열) → 문서 오프셋 변환
     func offsetFromPosition(line: Int, column: Int) -> Int {
         var offset = 0
-        for i in 0..<min(line, lines.count) {
+        for i in 0..<max(0, min(line, lines.count)) {
             offset += lines[i].content.count + 1 // +1 for newline
         }
-        if line < lines.count {
-            offset += min(column, lines[line].content.count)
+        if line >= 0 && line < lines.count {
+            offset += max(0, min(column, lines[line].content.count))
         }
         return offset
     }
@@ -158,7 +158,7 @@ final class TextDocument {
         if insertedLines.count == 1 {
             // 단일 행 삽입 (줄바꿈 없음)
             let content = line.content
-            let index = content.index(content.startIndex, offsetBy: min(column, content.count))
+            let index = content.index(content.startIndex, offsetBy: max(0, min(column, content.count)))
             var newContent = content
             newContent.insert(contentsOf: text, at: index)
 
@@ -171,7 +171,7 @@ final class TextDocument {
         } else {
             // 다중 행 삽입 (줄바꿈 포함)
             let content = line.content
-            let safeColumn = min(column, content.count)
+            let safeColumn = max(0, min(column, content.count))
             let beforeCursor = String(content.prefix(safeColumn))
             let afterCursor = String(content.suffix(content.count - safeColumn))
 
@@ -213,8 +213,8 @@ final class TextDocument {
             // 같은 행 내 삭제
             let line = lines[startLine]
             let content = line.content
-            let safeStart = min(startColumn, content.count)
-            let safeEnd = min(endColumn, content.count)
+            let safeStart = max(0, min(startColumn, content.count))
+            let safeEnd = max(0, min(endColumn, content.count))
             let before = String(content.prefix(safeStart))
             let after = String(content.suffix(content.count - safeEnd))
             line.content = before + after
@@ -301,5 +301,47 @@ final class TextDocument {
         for i in safeStart...safeEnd {
             lines[i].invalidateCache()
         }
+    }
+}
+
+// Cocoa and Core Text expose UTF-16 offsets; editor columns count grapheme clusters.
+extension String {
+    func utf16Offset(atCharacter column: Int) -> Int {
+        let index = index(startIndex, offsetBy: max(0, min(column, count)))
+        return index.utf16Offset(in: self)
+    }
+
+    func characterOffset(atUTF16 offset: Int) -> Int {
+        let target = max(0, min(offset, utf16.count))
+        var column = 0
+        var units = 0
+        for character in self {
+            let next = units + String(character).utf16.count
+            if next > target { break }
+            units = next
+            column += 1
+        }
+        return column
+    }
+}
+
+extension TextDocument {
+    func utf16Offset(from position: TextPosition) -> Int {
+        let line = max(0, min(position.line, lineCount - 1))
+        var result = 0
+        for index in 0..<line { result += (getLine(index) ?? "").utf16.count + 1 }
+        return result + (getLine(line) ?? "").utf16Offset(atCharacter: position.column)
+    }
+
+    func positionFromUTF16Offset(_ offset: Int) -> TextPosition {
+        var remaining = max(0, offset)
+        for index in 0..<lineCount {
+            let content = getLine(index) ?? ""
+            if remaining <= content.utf16.count {
+                return TextPosition(line: index, column: content.characterOffset(atUTF16: remaining))
+            }
+            remaining -= content.utf16.count + 1
+        }
+        return TextPosition(line: lineCount - 1, column: getLine(lineCount - 1)?.count ?? 0)
     }
 }

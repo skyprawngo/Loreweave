@@ -1,44 +1,17 @@
-# Editor Services
+# 탭과 원고 저장
 
-에디터 관련 서비스들입니다.
+`EditorTabManager.swift`는 URL별 `TabEditState`에 편집 텍스트, 저장본(`originalContent`), 0-based 커서를 보관한다. 수정 여부는 두 텍스트의 비교로 계산하며 저장 성공 시 저장본을 갱신한다. 화면의 저장 상태도 이 결과를 사용한다.
 
-## 파일 목록
+## 저장·복구 경계
 
-| 파일/폴더 | 역할 |
-|-----------|------|
-| `EditorTabManager.swift` | 에디터 탭 상태 관리 (열린 파일, 선택된 탭) |
-| `TextEngine/` | 커스텀 텍스트 엔진 (상세: `TextEngine/claude.md`) |
-| `TextEngine/EditorState/` | EditorState 기능별 확장 (Undo/Redo, 편집, 커서 등) |
+원고 쓰기는 `FileSystem/DocumentFileStore.swift`의 신규 생성/기준본 비교 저장을 거친다. 닫기·전환·삭제는 먼저 에디터를 flush하고 저장/버리기/취소를 결정한다. 버리기 승인만으로 캐시를 지우지 않으며, 후속 파일 작업 실패 시 초안을 유지한다.
 
-## 프로젝트별 설정 저장
+앱의 Application Support/Loreweave/Recovery에 프로젝트 경로별 복구 사본을 먼저 저장하고, `.{projectName}.weavedata/editor-session.json`에도 프로젝트 내부 탭을 저장한다. 탭·커서와 수정 중 `draftContent`·`baseContent`를 포함한다. 프로젝트 밖으로 다른 이름 저장한 탭의 `externalURL`은 앱 소유 복구 사본에서만 복원하며 프로젝트가 제공하는 절대 경로는 신뢰하지 않는다. 변경 후 0.5초 지연 저장이므로 갑작스러운 종료 직전 입력까지 보장하는 저널은 아니다. 복원 실패 시 원본 세션의 별도 사본 보존을 시도하고 오류를 알린다. 이것은 편집 초안 복구이며 전체 프로젝트의 장기 버전 백업은 아니다. 글꼴 등 프로젝트 설정은 같은 폴더의 `editor-settings.json`에 있다.
 
-에디터 설정(폰트, 크기, 줄간격)은 `.{projectName}.weavedata/editor-settings.json`에 저장
+파일 이동·이름 변경은 탭 ID를 유지하면서 URL·편집 캐시·저장 상태를 함께 옮긴다. `EditorContainerView`와 `LoreEditorRepresentable`은 문서 ID·URL·내용 revision으로 지연된 binding 갱신의 귀속을 확인한다. IME 확정 결과를 이전 URL로 돌려주는 연결을 유지해야 한다.
 
-## 탭 관리 (EditorTabManager)
+## 텍스트 엔진과 Undo
 
-에디터에서 열린 파일 탭들을 관리합니다.
+구조는 [TextEngine](TextEngine/claude.md)에 있다. `LoreEditorRepresentable.Coordinator`가 문서 ID별 `EditorState`를 보관해 같은 편집 화면 안의 탭 전환에서 Undo를 유지한다. 디스크 새 버전이나 외부 본문 교체는 `loadText`로 이력을 초기화한다. Undo 스택 자체를 세션에 영속 저장하는 것은 아니다.
 
-### 주요 기능
-- **탭 열기/닫기**: `openFile()`, `closeTab(at:)`
-- **탭 선택**: `selectTab(at:)`
-- **수정 상태 추적**: `isModified`, `setModified()`
-- **파일 저장**: `saveTab(at:content:)`, `saveCurrentTab(content:)`
-
-### 저장 완료 애니메이션
-`justSaved` 플래그로 저장 완료 시 초록색 점 표시 후 1초 후 자동 해제
-
-### 연동 뷰
-- `TabBarView`: 탭바 UI 표시
-- `EditorContainerView`: 선택된 탭의 파일 내용 표시
-- `ProjectExplorerView`: 파일 클릭 시 탭 열기
-
-## Undo/Redo 시스템
-
-에디터의 Undo/Redo는 `TextEngine/EditorState/`에서 관리됩니다.
-
-- **탭별 독립 히스토리**: 각 탭(EditorState)마다 별도 Undo 스택
-- **최대 100개**: 히스토리 제한, 초과 시 오래된 항목 제거
-- **파일 로드 시 초기화**: 탭 전환/새 파일 로드 시 히스토리 클리어
-- **연속 타이핑 그룹화**: 같은 문자 타입(한글/영문/일본어 등) 연속 입력은 하나의 Undo 단위
-
-상세 구현: `TextEngine/claude.md` 참조
+찾기·바꾸기와 서식 명령은 `EditorCommand`를 통해 텍스트·선택·Undo를 함께 바꾼다. 커서·선택 표시의 행 번호와 엔진의 0-based 위치를 혼동하지 않는다.

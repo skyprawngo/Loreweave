@@ -13,6 +13,7 @@ extension EditorState {
     /// Undo 실행
     @discardableResult
     func undo() -> Bool {
+        guard isEditable else { return false }
         // 대기 중인 그룹이 있으면 먼저 커밋
         commitPendingTextGroup()
 
@@ -27,6 +28,7 @@ extension EditorState {
     /// Redo 실행
     @discardableResult
     func redo() -> Bool {
+        guard isEditable else { return false }
         // 대기 중인 그룹이 있으면 먼저 커밋
         commitPendingTextGroup()
 
@@ -189,34 +191,73 @@ extension EditorState {
                 selection.moveCursor(line: selection.cursor.line + 1, column: selection.cursor.column)
             }
 
-        case .replaceText(let startLine, let startColumn, let endLine, let endColumn, let oldText, let newText):
+        case .replaceText(let startLine, let startColumn, _, _, let oldText, let newText):
             // 텍스트 대체
-            let textToRestore = isRedo ? newText : oldText
+            // Undo: newText를 삭제하고 oldText를 삽입
+            // Redo: oldText를 삭제하고 newText를 삽입
 
-            // 현재 텍스트 삭제 후 복원
-            document.delete(fromLine: startLine, column: startColumn, toLine: endLine, column: endColumn)
-            document.insert(textToRestore, atLine: startLine, column: startColumn)
-            viewport.updateLineCount(document.lineCount)
+            let textToDelete = isRedo ? oldText : newText
+            let textToInsert = isRedo ? newText : oldText
 
-            // 역액션
-            let reverseAction = UndoAction.replaceText(
-                startLine: startLine, startColumn: startColumn,
-                endLine: endLine, endColumn: endColumn,
-                oldText: newText, newText: oldText
-            )
-            if isRedo {
-                undoStack.append(reverseAction)
+            #if DEBUG
+            print("[EditorState] applyUndoAction isRedo=\(isRedo)")
+            print("  oldText='\(oldText)', newText='\(newText)'")
+            print("  textToDelete='\(textToDelete)', textToInsert='\(textToInsert)'")
+            #endif
+
+            // 삭제할 범위 계산 (현재 텍스트의 실제 범위)
+            let deleteEndLine: Int
+            let deleteEndColumn: Int
+
+            if textToDelete.isEmpty {
+                // 삭제할 텍스트가 없으면 시작 위치 = 끝 위치
+                deleteEndLine = startLine
+                deleteEndColumn = startColumn
             } else {
-                redoStack.append(reverseAction)
+                let deleteLines = textToDelete.components(separatedBy: "\n")
+                if deleteLines.count == 1 {
+                    deleteEndLine = startLine
+                    deleteEndColumn = startColumn + textToDelete.count
+                } else {
+                    deleteEndLine = startLine + deleteLines.count - 1
+                    deleteEndColumn = deleteLines.last?.count ?? 0
+                }
             }
 
-            // 커서를 변경된 텍스트 끝으로 이동
-            let insertedLines = textToRestore.components(separatedBy: "\n")
-            if insertedLines.count == 1 {
-                selection.moveCursor(line: startLine, column: startColumn + textToRestore.count)
+            // 현재 텍스트 삭제
+            if !textToDelete.isEmpty {
+                document.delete(fromLine: startLine, column: startColumn, toLine: deleteEndLine, column: deleteEndColumn)
+            }
+
+            // 새 텍스트 삽입
+            if !textToInsert.isEmpty {
+                document.insert(textToInsert, atLine: startLine, column: startColumn)
+            }
+
+            viewport.updateLineCount(document.lineCount)
+
+            // 원래 액션을 반대 스택에 추가 (역액션 생성 안함!)
+            if isRedo {
+                undoStack.append(action)
             } else {
-                let lastLine = startLine + insertedLines.count - 1
-                selection.moveCursor(line: lastLine, column: insertedLines.last?.count ?? 0)
+                redoStack.append(action)
+            }
+
+            #if DEBUG
+            print("  after: undoStack=\(undoStack.count), redoStack=\(redoStack.count)")
+            #endif
+
+            // 커서를 변경된 텍스트 끝으로 이동
+            if textToInsert.isEmpty {
+                selection.moveCursor(line: startLine, column: startColumn)
+            } else {
+                let insertedLines = textToInsert.components(separatedBy: "\n")
+                if insertedLines.count == 1 {
+                    selection.moveCursor(line: startLine, column: startColumn + textToInsert.count)
+                } else {
+                    let lastLine = startLine + insertedLines.count - 1
+                    selection.moveCursor(line: lastLine, column: insertedLines.last?.count ?? 0)
+                }
             }
         }
 

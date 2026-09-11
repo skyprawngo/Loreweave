@@ -18,7 +18,7 @@ enum AICLIType: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .claude: return "Claude"
-        case .chatgpt: return "ChatGPT"
+        case .chatgpt: return "ChatGPT (Codex)"
         }
     }
 
@@ -26,14 +26,22 @@ enum AICLIType: String, CaseIterable, Identifiable {
     var commandName: String {
         switch self {
         case .claude: return "claude"
-        case .chatgpt: return "chatgpt"
+        case .chatgpt: return "codex"
         }
     }
 
-    /// 아이콘 (SF Symbols)
+    /// 아이콘 이미지 이름 (Assets 카탈로그)
+    var iconImageName: String {
+        switch self {
+        case .claude: return "claude_icon"
+        case .chatgpt: return "chatgpt_icon"
+        }
+    }
+
+    /// 아이콘 (SF Symbols) - 폴백용
     var iconName: String {
         switch self {
-        case .claude: return "brain.head.profile"
+        case .claude: return "sparkles"
         case .chatgpt: return "bubble.left.and.bubble.right"
         }
     }
@@ -42,9 +50,19 @@ enum AICLIType: String, CaseIterable, Identifiable {
     var installPageURL: URL? {
         switch self {
         case .claude:
-            return URL(string: "https://docs.anthropic.com/en/docs/claude-code/getting-started")
+            return URL(string: "https://claude.ai/code")
         case .chatgpt:
-            return URL(string: "https://platform.openai.com/docs/guides/chat")
+            return URL(string: "https://developers.openai.com/codex/cli/")
+        }
+    }
+
+    /// 설치 문서 페이지 URL (설치 방법 안내)
+    var setupDocsURL: URL? {
+        switch self {
+        case .claude:
+            return URL(string: "https://code.claude.com/docs/ko/setup")
+        case .chatgpt:
+            return URL(string: "https://developers.openai.com/codex/cli/")
         }
     }
 
@@ -52,8 +70,8 @@ enum AICLIType: String, CaseIterable, Identifiable {
     var installScript: String? {
         switch self {
         case .claude:
-            // Claude CLI 공식 설치 명령어 (npm)
-            return "npm install -g @anthropic-ai/claude-code"
+            // Claude CLI 공식 설치 명령어 (native installer)
+            return "curl -fsSL https://claude.ai/install.sh | bash"
         case .chatgpt:
             // ChatGPT CLI는 별도 설치 스크립트가 없음
             return nil
@@ -75,6 +93,7 @@ enum AICLIType: String, CaseIterable, Identifiable {
         switch self {
         case .claude:
             return [
+                "~/.local/bin/claude",  // 공식 설치 기본 경로
                 "/usr/local/bin/claude",
                 "/opt/homebrew/bin/claude",
                 "~/.npm-global/bin/claude",
@@ -82,10 +101,10 @@ enum AICLIType: String, CaseIterable, Identifiable {
             ]
         case .chatgpt:
             return [
-                "/usr/local/bin/chatgpt",
-                "/opt/homebrew/bin/chatgpt",
-                "~/.local/bin/chatgpt",
-                "/usr/bin/chatgpt"
+                "~/.local/bin/codex",
+                "/usr/local/bin/codex",
+                "/opt/homebrew/bin/codex",
+                "/usr/bin/codex"
             ]
         }
     }

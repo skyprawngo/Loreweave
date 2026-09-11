@@ -1,39 +1,18 @@
-# Project Services
+# 프로젝트 형식과 접근 수명
 
-## 파일 목록
+`ProjectManager.swift`와 `Models/Project.swift`가 `.weaveproj` 폴더 및 메타데이터를 다룬다.
 
-| 파일 | 역할 |
-|------|------|
-| `ProjectManager.swift` | 프로젝트 생성/열기/저장 관리 |
-
-## ProjectManager
-
-`.weaveproj` 프로젝트의 생성, 열기, 저장을 담당합니다.
-
-### 프로젝트 구조
-
-```
+```text
 MyProject.weaveproj/
-├── .MyProject.weavedata/   # 숨김 데이터 폴더 (설정 저장용)
-│   └── project.json        # 프로젝트 메타데이터
-├── 세계관/                 # 섹션 폴더 (언어별 현지화)
-├── 캐릭터/
-├── 플롯/
-├── 콘티/
-├── 에디터/
-└── 아이디어/
+├── .MyProject.weavedata/
+│   ├── project.json
+│   ├── editor-settings.json
+│   └── ai-sessions/
+└── 원고와 섹션 폴더
 ```
 
-### 숨김 데이터 폴더
-- 프로젝트명 기반: `.{프로젝트명}.weavedata`
-- `dataFolderURL(for:)` - 숨김 폴더 경로 생성
+프로젝트 생성 때 섹션 폴더 이름은 `folder.*` 번역으로 정해진다. 이후 언어 변경이 기존 폴더명을 바꾼다고 가정하지 않는다.
 
-### 섹션 폴더
-프로젝트 생성 시 현재 언어에 맞는 폴더명으로 자동 생성 (`folder.*` 로컬라이제이션 키)
+숨김 데이터 폴더명은 프로젝트 파일명에서 계산되며 Editor와 AI 서비스에도 경로 계산이 있다. 이름 변경이나 저장 형식 수정은 이 참조들과 기존 데이터 호환성을 함께 살핀다.
 
-### 주요 기능
-- **생성**: `createProject(name:at:)`
-- **열기**: `openProjectFromFile(at:)`
-- **최근 프로젝트 열기**: `openProject(_:)`
-- **닫기**: `closeProject()`
-- **검증**: `validateRecentProjects()` - 존재하지 않는 프로젝트 자동 제거
+열기·닫기는 bookmark 접근, 최근/마지막 프로젝트와 연결된다. `openProjectFromFile`, `openProject`, `closeProject`와 메인 화면의 탭/AI 전환 호출을 함께 추적한다. `deleteProject`처럼 UI 이름과 다른 의미를 가질 수 있는 작업은 구현에서 실제 파일 삭제 여부를 확인한다.

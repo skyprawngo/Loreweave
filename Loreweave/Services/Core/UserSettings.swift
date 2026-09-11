@@ -2,7 +2,7 @@
 //  UserSettings.swift
 //  Loreweave
 //
-//  사용자 설정 및 디렉토리 접근 권한 관리
+//  사용자 설정 관리 (비샌드박스 환경)
 //
 
 import Foundation
@@ -112,36 +112,53 @@ enum AutoSaveOption: String, CaseIterable, Identifiable {
     }
 }
 
-/// 사용자 설정 관리자
+/// 사용자 설정 관리자 (비샌드박스 환경)
 @Observable
 final class UserSettings {
     static let shared = UserSettings()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+
+    // MARK: - Initialization
+
+    private init() {
+        // 앱 전용 UserDefaults suite 사용 (~/Library/Preferences/com.loreweave.settings.plist)
+        if let suite = UserDefaults(suiteName: "com.loreweave.settings") {
+            self.defaults = suite
+        } else {
+            self.defaults = UserDefaults.standard
+        }
+    }
 
     // MARK: - Keys
 
     private enum Keys {
-        static let appLaunchBehavior = "userSettings.appLaunchBehavior"
-        static let appTheme = "userSettings.appTheme"
-        static let appLanguage = "userSettings.appLanguage"
-        static let autoSaveOption = "userSettings.autoSaveOption"
-        static let aiProvider = "userSettings.aiProvider"
-        static let aiApiKey = "userSettings.aiApiKey"
-        static let editorFontSize = "userSettings.editorFontSize"
-        static let editorLineSpacing = "userSettings.editorLineSpacing"
-        static let editorFontName = "userSettings.editorFontName"
-        static let showLineNumbers = "userSettings.showLineNumbers"
-        static let defaultProjectLocation = "userSettings.defaultProjectLocation"
-        static let lastOpenedProject = "userSettings.lastOpenedProject"
-        static let recentProjectPaths = "userSettings.recentProjectPaths"
-        static let maxRecentProjects = "userSettings.maxRecentProjects"
-        static let aiAssistantPanelWidth = "userSettings.aiAssistantPanelWidth"
-        static let sidebarWidth = "userSettings.sidebarWidth"
-        static let appFontName = "userSettings.appFontName"
+        static let appLaunchBehavior = "appLaunchBehavior"
+        static let appTheme = "appTheme"
+        static let appLanguage = "appLanguage"
+        static let autoSaveOption = "autoSaveOption"
+        static let aiProvider = "aiProvider"
+        static let aiApiKey = "aiApiKey"
+        static let editorFontSize = "editorFontSize"
+        static let editorLineSpacing = "editorLineSpacing"
+        static let editorFontName = "editorFontName"
+        static let showLineNumbers = "showLineNumbers"
+        static let defaultProjectLocation = "defaultProjectLocation"
+        static let lastOpenedProject = "lastOpenedProject"
+        static let recentProjectPaths = "recentProjectPaths"
+        static let maxRecentProjects = "maxRecentProjects"
+        static let aiAssistantPanelWidth = "aiAssistantPanelWidth"
+        static let sidebarWidth = "sidebarWidth"
+        static let appFontName = "appFontName"
+        static let rememberCursorPosition = "rememberCursorPosition"
         // AI 어시스턴트 설정
-        static let aiAssistantEnabled = "userSettings.aiAssistantEnabled"
-        static let aiAssistantCLIType = "userSettings.aiAssistantCLIType"
+        static let aiAssistantEnabled = "aiAssistantEnabled"
+        static let aiAssistantCLIType = "aiAssistantCLIType"
+        static let aiCLIPath = "aiCLIPath"
+        /// disconnect 후 수동 CLI 선택 강제 플래그
+        static let requireManualCLISelection = "requireManualCLISelection"
+        /// AI CLI 터미널 모드 (대화형 프로세스 유지)
+        static let aiTerminalMode = "aiTerminalMode"
     }
 
     // MARK: - 일반 설정
@@ -228,7 +245,6 @@ final class UserSettings {
     }
 
     /// 에디터 줄간격 (lineHeightMultiple 값)
-    /// 1.0 = 100% 기본값, 1.25 = 125%, 1.5 = 150%, 2.0 = 200%
     var editorLineSpacing: CGFloat {
         get { CGFloat(defaults.object(forKey: Keys.editorLineSpacing) as? Double ?? 1.0) }
         set { defaults.set(Double(newValue), forKey: Keys.editorLineSpacing) }
@@ -246,137 +262,66 @@ final class UserSettings {
         set { defaults.set(newValue, forKey: Keys.showLineNumbers) }
     }
 
+    /// 파일 열 때 커서 위치 기억
+    var rememberCursorPosition: Bool {
+        get { defaults.object(forKey: Keys.rememberCursorPosition) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.rememberCursorPosition) }
+    }
+
     // MARK: - 디렉토리 설정
 
-    /// 기본 프로젝트 저장 위치 (Security-Scoped Bookmark)
-    var defaultProjectLocationBookmark: Data? {
-        get { defaults.data(forKey: Keys.defaultProjectLocation) }
-        set { defaults.set(newValue, forKey: Keys.defaultProjectLocation) }
+    /// 기본 프로젝트 저장 위치
+    var defaultProjectLocation: URL? {
+        get {
+            guard let path = defaults.string(forKey: Keys.defaultProjectLocation) else { return nil }
+            let url = URL(fileURLWithPath: path)
+            return FileManager.default.fileExists(atPath: path) ? url : nil
+        }
+        set { defaults.set(newValue?.path, forKey: Keys.defaultProjectLocation) }
     }
 
-    /// 기본 프로젝트 저장 위치 URL 가져오기
+    /// 기본 프로젝트 저장 위치 URL 가져오기 (하위 호환성)
     func getDefaultProjectLocation() -> URL? {
-        guard let bookmarkData = defaultProjectLocationBookmark else { return nil }
-
-        do {
-            var isStale = false
-            let url = try URL(
-                resolvingBookmarkData: bookmarkData,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-
-            if isStale {
-                // Bookmark이 오래된 경우 갱신 시도
-                if let newBookmark = try? url.bookmarkData(
-                    options: .withSecurityScope,
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                ) {
-                    defaultProjectLocationBookmark = newBookmark
-                }
-            }
-
-            return url
-        } catch {
-            print("Failed to resolve default project location bookmark: \(error)")
-            return nil
-        }
+        return defaultProjectLocation
     }
 
-    /// 기본 프로젝트 저장 위치 설정
+    /// 기본 프로젝트 저장 위치 설정 (하위 호환성)
     func setDefaultProjectLocation(_ url: URL) -> Bool {
-        do {
-            let bookmarkData = try url.bookmarkData(
-                options: .withSecurityScope,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-            defaultProjectLocationBookmark = bookmarkData
-            return true
-        } catch {
-            print("Failed to save default project location bookmark: \(error)")
-            return false
-        }
+        defaultProjectLocation = url
+        return true
     }
 
     // MARK: - 마지막으로 열린 프로젝트
 
-    /// 마지막으로 열린 프로젝트 Bookmark Data
-    private var lastOpenedProjectBookmark: Data? {
-        get { defaults.data(forKey: Keys.lastOpenedProject) }
+    /// 마지막으로 열린 프로젝트 경로
+    private var lastOpenedProjectPath: String? {
+        get { defaults.string(forKey: Keys.lastOpenedProject) }
         set { defaults.set(newValue, forKey: Keys.lastOpenedProject) }
     }
 
-    /// 마지막으로 열린 프로젝트가 저장되어 있는지 확인 (Security-Scoped 접근 없이)
+    /// 마지막으로 열린 프로젝트가 저장되어 있는지 확인
     func hasLastOpenedProject() -> Bool {
-        return lastOpenedProjectBookmark != nil
+        guard let path = lastOpenedProjectPath else { return false }
+        return FileManager.default.fileExists(atPath: path)
     }
 
     /// 마지막으로 열린 프로젝트 URL 가져오기
     func getLastOpenedProject() -> URL? {
-        guard let bookmarkData = lastOpenedProjectBookmark else { return nil }
-
-        do {
-            var isStale = false
-            let url = try URL(
-                resolvingBookmarkData: bookmarkData,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-
-            // Security-Scoped Resource 접근 시작
-            guard url.startAccessingSecurityScopedResource() else {
-                print("Failed to start accessing security scoped resource for last opened project")
-                return nil
-            }
-
-            // 파일이 존재하는지 확인
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                url.stopAccessingSecurityScopedResource()
-                lastOpenedProjectBookmark = nil
-                return nil
-            }
-
-            if isStale {
-                // Bookmark 갱신
-                if let newBookmark = try? url.bookmarkData(
-                    options: .withSecurityScope,
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                ) {
-                    lastOpenedProjectBookmark = newBookmark
-                }
-            }
-
-            // 접근 권한은 유지 (호출자가 사용 후 stopAccessingSecurityScopedResource 호출 필요)
-            return url
-        } catch {
-            print("Failed to resolve last opened project bookmark: \(error)")
-            lastOpenedProjectBookmark = nil
+        guard let path = lastOpenedProjectPath,
+              FileManager.default.fileExists(atPath: path) else {
             return nil
         }
+        return URL(fileURLWithPath: path)
     }
 
     /// 마지막으로 열린 프로젝트 저장
     func setLastOpenedProject(_ url: URL) {
-        do {
-            let bookmarkData = try url.bookmarkData(
-                options: .withSecurityScope,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-            lastOpenedProjectBookmark = bookmarkData
-        } catch {
-            print("Failed to save last opened project bookmark: \(error)")
-        }
+        lastOpenedProjectPath = url.path
     }
 
     /// 마지막으로 열린 프로젝트 삭제
     func clearLastOpenedProject() {
-        lastOpenedProjectBookmark = nil
+        lastOpenedProjectPath = nil
     }
 
     // MARK: - 최근 프로젝트
@@ -387,120 +332,52 @@ final class UserSettings {
         set { defaults.set(newValue, forKey: Keys.maxRecentProjects) }
     }
 
-    /// 최근 프로젝트 경로 목록 (Bookmark Data)
-    private var recentProjectBookmarks: [Data] {
-        get { defaults.array(forKey: Keys.recentProjectPaths) as? [Data] ?? [] }
+    /// 최근 프로젝트 경로 목록
+    private var recentProjectPaths: [String] {
+        get { defaults.array(forKey: Keys.recentProjectPaths) as? [String] ?? [] }
         set { defaults.set(newValue, forKey: Keys.recentProjectPaths) }
     }
 
     /// 최근 프로젝트 URL 목록 가져오기
     func getRecentProjects() -> [URL] {
-        var urls: [URL] = []
-        var validBookmarks: [Data] = []
+        let validPaths = recentProjectPaths.filter { FileManager.default.fileExists(atPath: $0) }
 
-        for bookmarkData in recentProjectBookmarks {
-            do {
-                var isStale = false
-                let url = try URL(
-                    resolvingBookmarkData: bookmarkData,
-                    options: .withSecurityScope,
-                    relativeTo: nil,
-                    bookmarkDataIsStale: &isStale
-                )
-
-                // 파일이 존재하는지 확인
-                if FileManager.default.fileExists(atPath: url.path) {
-                    urls.append(url)
-
-                    if isStale {
-                        // Bookmark 갱신
-                        if let newBookmark = try? url.bookmarkData(
-                            options: .withSecurityScope,
-                            includingResourceValuesForKeys: nil,
-                            relativeTo: nil
-                        ) {
-                            validBookmarks.append(newBookmark)
-                        } else {
-                            validBookmarks.append(bookmarkData)
-                        }
-                    } else {
-                        validBookmarks.append(bookmarkData)
-                    }
-                }
-            } catch {
-                // 무효한 bookmark는 건너뜀
-                continue
-            }
+        // 유효하지 않은 경로가 있으면 정리
+        if validPaths.count != recentProjectPaths.count {
+            recentProjectPaths = validPaths
         }
 
-        // 유효한 bookmark만 저장
-        if validBookmarks.count != recentProjectBookmarks.count {
-            recentProjectBookmarks = validBookmarks
-        }
-
-        return urls
+        return validPaths.map { URL(fileURLWithPath: $0) }
     }
 
     /// 최근 프로젝트에 추가
     func addRecentProject(_ url: URL) {
-        do {
-            let bookmarkData = try url.bookmarkData(
-                options: .withSecurityScope,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
+        var paths = recentProjectPaths
 
-            var bookmarks = recentProjectBookmarks
+        // 이미 존재하는 경우 제거 (중복 방지)
+        paths.removeAll { $0 == url.path }
 
-            // 이미 존재하는 경우 제거 (중복 방지)
-            bookmarks.removeAll { existingData in
-                var isStale = false
-                if let existingURL = try? URL(
-                    resolvingBookmarkData: existingData,
-                    options: .withSecurityScope,
-                    relativeTo: nil,
-                    bookmarkDataIsStale: &isStale
-                ) {
-                    return existingURL == url
-                }
-                return false
-            }
+        // 맨 앞에 추가
+        paths.insert(url.path, at: 0)
 
-            // 맨 앞에 추가
-            bookmarks.insert(bookmarkData, at: 0)
-
-            // 최대 개수 제한
-            if bookmarks.count > maxRecentProjects {
-                bookmarks = Array(bookmarks.prefix(maxRecentProjects))
-            }
-
-            recentProjectBookmarks = bookmarks
-        } catch {
-            print("Failed to add recent project: \(error)")
+        // 최대 개수 제한
+        if paths.count > maxRecentProjects {
+            paths = Array(paths.prefix(maxRecentProjects))
         }
+
+        recentProjectPaths = paths
     }
 
     /// 최근 프로젝트에서 제거
     func removeRecentProject(_ url: URL) {
-        var bookmarks = recentProjectBookmarks
-        bookmarks.removeAll { existingData in
-            var isStale = false
-            if let existingURL = try? URL(
-                resolvingBookmarkData: existingData,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            ) {
-                return existingURL == url
-            }
-            return false
-        }
-        recentProjectBookmarks = bookmarks
+        var paths = recentProjectPaths
+        paths.removeAll { $0 == url.path }
+        recentProjectPaths = paths
     }
 
     /// 최근 프로젝트 목록 초기화
     func clearRecentProjects() {
-        recentProjectBookmarks = []
+        recentProjectPaths = []
     }
 
     // MARK: - UI 레이아웃 설정
@@ -531,18 +408,63 @@ final class UserSettings {
         set { defaults.set(newValue, forKey: Keys.aiAssistantCLIType) }
     }
 
+    /// AI CLI 경로
+    private var aiCLIPathString: String? {
+        get { defaults.string(forKey: Keys.aiCLIPath) }
+        set { defaults.set(newValue, forKey: Keys.aiCLIPath) }
+    }
+
+    /// AI CLI 경로 저장
+    func setAICLIPath(_ url: URL) -> Bool {
+        aiCLIPathString = url.path
+        return true
+    }
+
+    /// AI CLI 경로 가져오기
+    func getAICLIPath() -> URL? {
+        guard let path = aiCLIPathString,
+              FileManager.default.fileExists(atPath: path) else {
+            return nil
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// AI CLI 경로가 저장되어 있는지 확인
+    func hasAICLIPath() -> Bool {
+        guard let path = aiCLIPathString else { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
+
+    /// AI CLI 경로 삭제
+    func clearAICLIPath() {
+        aiCLIPathString = nil
+    }
+
+    /// disconnect 후 수동 CLI 선택 강제 플래그
+    /// - disconnect 시 true로 설정
+    /// - 사용자가 CLI 파일을 수동 선택하면 false로 리셋
+    var requireManualCLISelection: Bool {
+        get { defaults.object(forKey: Keys.requireManualCLISelection) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.requireManualCLISelection) }
+    }
+
+    /// AI CLI 터미널 모드 (대화형 프로세스 유지)
+    /// - true: 대화형 터미널 모드 (프로세스 유지, stdin/stdout 스트림)
+    /// - false: 단발성 프롬프트 모드 (매 질문마다 새 프로세스, --resume 사용)
+    var aiTerminalMode: Bool {
+        get { defaults.object(forKey: Keys.aiTerminalMode) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.aiTerminalMode) }
+    }
+
     // MARK: - 앱 전역 폰트 설정
 
     /// 앱 전역 폰트 이름 (에디터와 줄번호 제외)
-    /// 빈 문자열이면 시스템 폰트 사용
     var appFontName: String {
         get { defaults.string(forKey: Keys.appFontName) ?? "" }
         set { defaults.set(newValue, forKey: Keys.appFontName) }
     }
 
     // MARK: - Private
-
-    private init() {}
 
     /// 언어 설정 적용
     private func applyLanguageSetting(_ language: AppLanguage) {
@@ -569,6 +491,7 @@ final class UserSettings {
             Keys.editorLineSpacing,
             Keys.editorFontName,
             Keys.showLineNumbers,
+            Keys.rememberCursorPosition,
             Keys.defaultProjectLocation,
             Keys.lastOpenedProject,
             Keys.recentProjectPaths,
@@ -577,7 +500,8 @@ final class UserSettings {
             Keys.sidebarWidth,
             Keys.appFontName,
             Keys.aiAssistantEnabled,
-            Keys.aiAssistantCLIType
+            Keys.aiAssistantCLIType,
+            Keys.aiCLIPath
         ]
 
         for key in allKeys {

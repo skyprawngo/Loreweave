@@ -25,6 +25,7 @@ final class AppCommands: ObservableObject {
     @Published var closeAllTabsRequested = false
 
     // MARK: - Edit Commands
+    @Published var searchInDocument: String?
     @Published var findRequested = false
     @Published var findAndReplaceRequested = false
 
@@ -97,41 +98,54 @@ struct LoreweaveCommands: Commands {
     @ObservedObject var appCommands: AppCommands
 
     var body: some Commands {
+        CommandMenu(L10n.ai.tools) {
+            Button(L10n.ai.continueWritingAction) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.continueWritingAction) }
+                .configuredShortcut(.aiContinueWriting)
+            Button(L10n.ai.refineText) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.refineText) }
+                .configuredShortcut(.aiRefine)
+            Button(L10n.ai.summarize) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.summarize) }
+                .configuredShortcut(.aiSummarize)
+        }
         // 파일 메뉴
         CommandGroup(replacing: .newItem) {
+            Button(L10n.get("shortcut.project.new")) { appCommands.newProjectRequested = true }
+                .configuredShortcut(.newProject)
+            Button(L10n.get("shortcut.project.refresh")) { appCommands.refreshProjectRequested = true }
+                .configuredShortcut(.refreshProject)
+            Divider()
             Button(L10n.get("shortcut.file.new")) {
                 appCommands.newFileRequested = true
             }
-            .keyboardShortcut("n", modifiers: .command)
+            .configuredShortcut(.newFile)
 
             Button(L10n.get("shortcut.file.newFolder")) {
                 appCommands.newFolderRequested = true
             }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .configuredShortcut(.newFolder)
 
             Divider()
 
             Button(L10n.get("shortcut.file.open")) {
                 appCommands.openFileRequested = true
             }
-            .keyboardShortcut("o", modifiers: .command)
+            .configuredShortcut(.openFile)
 
             Button(L10n.get("shortcut.project.open")) {
                 appCommands.openProjectRequested = true
             }
-            .keyboardShortcut("o", modifiers: [.command, .shift])
+            .configuredShortcut(.openProject)
         }
 
         CommandGroup(replacing: .saveItem) {
             Button(L10n.get("shortcut.file.save")) {
                 appCommands.saveRequested = true
             }
-            .keyboardShortcut("s", modifiers: .command)
+            .configuredShortcut(.save)
 
             Button(L10n.get("shortcut.file.saveAs")) {
                 appCommands.saveAsRequested = true
             }
-            .keyboardShortcut("s", modifiers: [.command, .shift])
+            .configuredShortcut(.saveAs)
         }
 
         // 편집 메뉴 - 찾기
@@ -141,12 +155,12 @@ struct LoreweaveCommands: Commands {
             Button(L10n.get("shortcut.edit.find")) {
                 appCommands.findRequested = true
             }
-            .keyboardShortcut("f", modifiers: .command)
+            .configuredShortcut(.find)
 
             Button(L10n.get("shortcut.edit.findAndReplace")) {
                 appCommands.findAndReplaceRequested = true
             }
-            .keyboardShortcut("f", modifiers: [.command, .option])
+            .configuredShortcut(.findAndReplace)
         }
 
         // 보기 메뉴
@@ -154,29 +168,29 @@ struct LoreweaveCommands: Commands {
             Button(L10n.get("shortcut.view.toggleSidebar")) {
                 appCommands.toggleSidebarRequested = true
             }
-            .keyboardShortcut("b", modifiers: .command)
+            .configuredShortcut(.toggleSidebar)
 
             Button(L10n.get("shortcut.view.toggleAIPanel")) {
                 appCommands.toggleAIPanelRequested = true
             }
-            .keyboardShortcut("j", modifiers: .command)
+            .configuredShortcut(.toggleAIPanel)
 
             Divider()
 
             Button(L10n.get("shortcut.view.zoomIn")) {
                 appCommands.zoomInRequested = true
             }
-            .keyboardShortcut("=", modifiers: .command)
+            .configuredShortcut(.zoomIn)
 
             Button(L10n.get("shortcut.view.zoomOut")) {
                 appCommands.zoomOutRequested = true
             }
-            .keyboardShortcut("-", modifiers: .command)
+            .configuredShortcut(.zoomOut)
 
             Button(L10n.get("shortcut.view.resetZoom")) {
                 appCommands.resetZoomRequested = true
             }
-            .keyboardShortcut("0", modifiers: .command)
+            .configuredShortcut(.resetZoom)
         }
 
         // 창 메뉴 - 탭 네비게이션
@@ -186,24 +200,24 @@ struct LoreweaveCommands: Commands {
             Button(L10n.get("shortcut.tab.next")) {
                 appCommands.nextTabRequested = true
             }
-            .keyboardShortcut(.tab, modifiers: .control)
+            .configuredShortcut(.nextTab)
 
             Button(L10n.get("shortcut.tab.previous")) {
                 appCommands.previousTabRequested = true
             }
-            .keyboardShortcut(.tab, modifiers: [.control, .shift])
+            .configuredShortcut(.previousTab)
 
             Divider()
 
             Button(L10n.get("shortcut.file.closeTab")) {
                 appCommands.closeTabRequested = true
             }
-            .keyboardShortcut("w", modifiers: .command)
+            .configuredShortcut(.closeTab)
 
             Button(L10n.get("shortcut.file.closeAllTabs")) {
                 appCommands.closeAllTabsRequested = true
             }
-            .keyboardShortcut("w", modifiers: [.command, .option])
+            .configuredShortcut(.closeAllTabs)
 
             Divider()
 
@@ -212,8 +226,30 @@ struct LoreweaveCommands: Commands {
                 Button(L10n.get("shortcut.tab.goTo\(index)")) {
                     appCommands.goToTabRequested = index
                 }
-                .keyboardShortcut(KeyEquivalent(Character("\(index)")), modifiers: .command)
+
+                .configuredShortcut(ShortcutAction(rawValue: "tab.goTo\(index)")!)
             }
         }
+
+        // 도움말 메뉴
+        CommandGroup(replacing: .help) {
+            Button(L10n.get("terms.title")) {
+                TermsWindowController.shared.openTermsWindow()
+            }
+        }
+    }
+}
+
+private struct ConfiguredShortcut: ViewModifier {
+    let action: ShortcutAction
+    @State private var manager = KeyboardShortcutManager.shared
+    func body(content: Content) -> some View {
+        content.keyboardShortcut(manager.binding(for: action)?.keyboardShortcut)
+    }
+}
+
+extension View {
+    func configuredShortcut(_ action: ShortcutAction) -> some View {
+        modifier(ConfiguredShortcut(action: action))
     }
 }

@@ -1,0 +1,36 @@
+{
+  "version": "2.0",
+  "description": "Provider-specific context templates. CLI protocol flags belong to CLIProcessManager.",
+  "claude": {
+    "templates": {
+      "contextWrapper": {
+        "description": "태그된 이전 대화를 포함할 때 사용하는 래퍼 템플릿",
+        "template": "다음 이전 대화 내용을 참조하여 질문에 답변해주세요:\n\n{{context}}\n\n---\n현재 질문: {{userInput}}"
+      },
+      "contextCard": {
+        "description": "개별 태그된 대화 카드 형식",
+        "template": "[이전 대화 참조]\n질문: {{question}}\n답변: {{answer}}"
+      },
+      "contextSeparator": {
+        "description": "여러 컨텍스트 카드 사이의 구분자",
+        "value": "\n\n"
+      }
+    }
+  },
+  "chatgpt": {
+    "templates": {
+      "contextWrapper": {
+        "description": "태그된 이전 대화를 포함할 때 사용하는 래퍼 템플릿",
+        "template": "Reference the following previous conversation:\n\n{{context}}\n\n---\nCurrent question: {{userInput}}"
+      },
+      "contextCard": {
+        "description": "개별 태그된 대화 카드 형식",
+        "template": "[Previous conversation]\nQ: {{question}}\nA: {{answer}}"
+      },
+      "contextSeparator": {
+        "description": "여러 컨텍스트 카드 사이의 구분자",
+        "value": "\n\n"
+      }
+    }
+  }
+}

@@ -1,49 +1,9 @@
-# 테마 시스템
+# 테마 계약
 
-## 파일 구조
+`ThemePalette.swift`는 색상 계약, `AppColors.swift`는 현재 테마 라우터다. SwiftUI 색상과 AppKit의 `ThemePaletteNSColor` 경로가 함께 있다. `DarkTheme`, `LightTheme`, `SystemTheme`, `OpaqueTheme`가 이 계약을 구현한다.
 
-| 파일 | 역할 |
-|------|------|
-| `ThemePalette.swift` | 테마 프로토콜 정의 |
-| `AppColors.swift` | 색상 라우터 (현재 테마에서 색상 가져옴) |
-| `DarkTheme.swift` | 다크 테마 (기본 테마) |
-| `SystemTheme.swift` | 시스템 테마 (라이트/다크 자동) |
-| `LightTheme.swift` | 라이트 테마 |
-| `OpaqueTheme.swift` | 불투명 테마 |
+기존 색상이 목적에 맞으면 `AppColors`를 재사용한다. 새 공통 색상은 프로토콜·라우터·각 테마 구현을 함께 맞춘다. DarkTheme만 수정하는 방식은 다른 테마의 계약 또는 표시를 누락시킬 수 있다.
 
-## 핵심 개념
+`ThemeAwareBackground.swift`는 `isOpaque`에 따른 배경 분기를 제공한다. 배경 변경은 불투명 모드와 시스템 밝기 전환에서 텍스트·선택 영역의 대비도 확인한다.
 
-- **ThemePalette**: 모든 테마가 준수해야 하는 색상 속성 정의
-- **AppColors**: 뷰에서 색상 접근 시 사용 (`AppColors.textPrimary`)
-- **기본 테마**: DarkTheme - 일반 작업 시 이 파일만 수정
-
-## 테마 최신화 규칙
-
-### 일반 작업 시
-새 UI 컴포넌트 추가 시 → `DarkTheme.swift`에만 색상 추가
-
-### 테마 전체 최신화 요청 시
-1. DarkTheme 기준으로 다른 테마 파일과 비교
-2. 누락된 속성 추가, 불필요한 속성 제거
-3. 각 테마 특성에 맞게 색상값 조정
-
-## 테마 종류
-
-| 테마 | ID | 불투명 |
-|------|----|--------|
-| SystemTheme | `system` | ❌ |
-| LightTheme | `light` | ❌ |
-| DarkTheme | `dark` | ❌ |
-| OpaqueTheme | `opaque` | ✅ |
-
-**불투명 테마**: `VisualEffectBackground` 대신 고정 배경색 사용
-
-## 색상 속성 카테고리
-
-- **Background**: background, barBackground, sidebarBackground, contentBackground, textEditorBackground, controlBackground
-- **Text**: textPrimary, textSecondary, textTertiary, textDisabled
-- **Tab Bar**: tabSelectedBackground, tabHoverBackground, tabDefaultBackground, tabText 등
-- **Toolbar**: toolbarButtonHover, toolbarButtonPressed, toolbarToggleSelected, toolbarIcon 등
-- **Sidebar**: sidebarItemSelected, sidebarItemHover, sidebarHeaderText
-- **Separators**: separator, separatorOpaque, controlBorder
-- **Indicators**: modifiedIndicator, savedIndicator, errorIndicator, warningIndicator
+`AppColors`, 배경, AppKit appearance는 시작 시 선택된 `ThemeManager.appliedTheme`를 기준으로 한다. `UserSettings.appTheme`에 저장한 새 선택은 다음 앱 시작에 적용된다. 즉시 테마 전환을 추가한다면 색상 라우터와 배경·appearance의 수명을 함께 바꿔야 한다.

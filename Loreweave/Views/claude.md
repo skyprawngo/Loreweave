@@ -1,49 +1,9 @@
-# Views 디렉토리 규칙
+# 화면과 입력 연결
 
-## macOS UI 스타일 가이드
+`MainEditorView.swift`가 프로젝트 탐색, 탭, 에디터, AI 패널을 연결한다. 종속 뷰는 `MainEditor/`에 있으며 시작·설정·약관은 `WelcomeView`, `SettingsView`, `TermsOfServiceView`에서 찾는다.
 
-### 색상
-`Theme/AppColors.swift`에서 중앙 관리 - 하드코딩 금지
+원고 화면은 `EditorContainerView` → `EditorPanel/LoreTextView/LoreEditorRepresentable` → `LoreEditorView`/`LoreTextView`로 이어진다. Core Text 행 렌더링은 flipped 좌표계를 사용한다. 스크롤·선택·커서·gutter 변경은 동일한 좌표 기준을 공유해야 한다.
 
-### Liquid Glass 효과 (macOS 26.0+)
-`.glassEffect()` 모디파이어 사용 - macOS Tahoe 네이티브 글래스 효과
+AppKit 입력의 IME 조합 중 문자열 전체 교체는 조합을 깨뜨릴 수 있다. `hasMarkedText`, 조합 확정/취소, first responder와 SwiftUI binding의 갱신 순서를 함께 확인한다. 메뉴 키 동작은 [Core](../Services/Core/claude.md)의 단축키와 responder 경로를 따른다.
 
-### 버튼 스타일
-- 네비게이션 버튼: `Capsule()` 클립, 호버/클릭 배경색 적용
-- 툴바 토글 버튼: `RoundedRectangle(cornerRadius: 4)`, 선택 시 `toolbarToggleSelected`
-
-### 공통 수치
-- 모서리 반경: 5-6pt
-- 패딩: horizontal 8pt, vertical 4-5pt
-- 아이콘 크기: 12pt (툴바), 13pt (일반)
-
-### LoreEditor 커스텀 에디터
-Core Text 기반 행별 렌더링 - **좌표계**: `isFlipped = true`
-
-### NSAlert 다이얼로그
-**필수**: `alert.beginSheetModalWithArrowNavigation(for:completionHandler:)` 사용 (좌우 화살표 키 네비게이션)
-
-### NSTextView 한글 입력
-조합 중(`hasMarkedText()`)일 때 `setAttributedString()` 호출 금지
-
-## 뷰 계층 구조
-
-**배치 원칙**: 윈도우 뷰는 `Views/` 루트에, 종속 뷰는 `{상위뷰명에서 View 제외}/` 폴더에
-
-```
-Views/
-├── MainEditorView.swift          # 메인 윈도우
-│   └── MainEditor/
-│       ├── Sidebar/
-│       ├── EditorContainerView.swift
-│       │   └── EditorPanel/
-│       │       └── LoreTextView/     # 커스텀 에디터
-│       ├── TabBarView.swift
-│       └── AIAssistantView.swift
-├── WelcomeView.swift             # 시작 화면
-└── SettingsView.swift            # 설정
-```
-
-## 테마 호환 배경
-
-`ThemeAwareBackground` 사용 - 테마에 따라 투명/불투명 자동 전환
+색상은 `AppColors`, 투명/불투명 배경은 `ThemeAwareBackground`의 기존 경로를 사용한다. Liquid Glass 사용 가능 여부는 앱 타깃 macOS 26.0 설정과 연결된다. 고정 UI 치수 목록보다 변경 주변 화면의 현재 컴포넌트를 기준으로 맞춘다.

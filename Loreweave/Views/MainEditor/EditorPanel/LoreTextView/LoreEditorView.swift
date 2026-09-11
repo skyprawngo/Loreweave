@@ -94,6 +94,11 @@ final class LoreEditorView: NSView {
         contentView.textView.onDocumentStructureChange = { [weak self] in
             self?.documentDidChange()
         }
+
+        // 커서 이동 시 스크롤 처리
+        contentView.textView.onScrollToCursor = { [weak self] lineIndex in
+            self?.scrollToCursorIfNeeded(lineIndex)
+        }
     }
 
     deinit {
@@ -179,15 +184,89 @@ final class LoreEditorView: NSView {
         contentView.textView.needsDisplay = true
     }
 
+    // MARK: - Scroll Position
+
+    /// 스크롤 변경 콜백
+    var onScrollChange: ((CGFloat) -> Void)?
+
+    /// 현재 스크롤 Y 오프셋
+    var scrollOffsetY: CGFloat {
+        get { clipView.bounds.origin.y }
+        set { scrollTo(offsetY: newValue) }
+    }
+
+    /// 스크롤 위치 설정
+    func scrollTo(offsetY: CGFloat) {
+        let maxY = max(0, contentView.frame.height - scrollView.bounds.height)
+        let clampedY = max(0, min(offsetY, maxY))
+        clipView.scroll(to: NSPoint(x: 0, y: clampedY))
+        scrollView.reflectScrolledClipView(clipView)
+    }
+
+    /// 스크롤 이벤트 감지 시작
+    func startObservingScroll() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScrollChange),
+            name: NSView.boundsDidChangeNotification,
+            object: clipView
+        )
+        clipView.postsBoundsChangedNotifications = true
+    }
+
+    @objc private func handleScrollChange(_ notification: Notification) {
+        // IME 조합으로 인한 자동 스크롤인 경우 플래그 리셋
+        if textView.isScrollingForIME {
+            textView.clearScrollingForIMEFlag()
+        }
+        // 스크롤 시에는 조합 중인 텍스트를 건드리지 않음
+        // IME가 알아서 처리하도록 두고, 다음 입력 시 자연스럽게 확정됨
+
+        onScrollChange?(clipView.bounds.origin.y)
+    }
+
     // MARK: - Public Methods
 
-    /// 특정 줄로 스크롤
+    /// 특정 줄로 스크롤 (줄이 화면 상단에 오도록)
     func scrollToLine(_ lineIndex: Int) {
         let lineHeight = contentView.textView.lineHeight
-        let targetY = CGFloat(lineIndex) * lineHeight - (scrollView.bounds.height - lineHeight) / 2
+        let viewportWidth = scrollView.bounds.width - contentView.gutterView.gutterWidth - 8
+
+        // Word Wrap 시 동적 높이 계산
+        let targetY: CGFloat
+        if contentView.textView.wordWrapEnabled && viewportWidth > 0 {
+            targetY = contentView.textView.yPosition(for: lineIndex, viewportWidth: viewportWidth)
+        } else {
+            targetY = CGFloat(lineIndex) * lineHeight
+        }
 
         clipView.scroll(to: NSPoint(x: 0, y: max(0, targetY)))
         scrollView.reflectScrolledClipView(clipView)
+    }
+
+    /// 커서가 화면에 보이지 않으면 스크롤
+    private func scrollToCursorIfNeeded(_ lineIndex: Int) {
+        let rect = contentView.textView.caretRect
+        let cursorY = rect.minY
+        let cursorHeight = rect.height
+
+        // 현재 뷰포트 영역
+        let visibleRect = scrollView.documentVisibleRect
+
+        // 커서가 뷰포트 밖에 있는지 확인
+        let cursorTop = cursorY
+        let cursorBottom = cursorY + cursorHeight
+
+        if cursorTop < visibleRect.minY {
+            // 커서가 화면 위에 있음 - 커서를 화면 상단에 배치
+            clipView.scroll(to: NSPoint(x: 0, y: max(0, cursorTop)))
+            scrollView.reflectScrolledClipView(clipView)
+        } else if cursorBottom > visibleRect.maxY {
+            // 커서가 화면 아래에 있음 - 커서를 화면 하단에 배치
+            let newY = cursorBottom - visibleRect.height
+            clipView.scroll(to: NSPoint(x: 0, y: max(0, newY)))
+            scrollView.reflectScrolledClipView(clipView)
+        }
     }
 
     /// 포커스 설정
@@ -284,6 +363,7 @@ final class EditorContentView: NSView {
         gutterView.baselineOffset = textView.baselineOffset  // 동일한 baselineOffset 사용
         gutterView.totalLineCount = editorState.document.lineCount
         gutterView.currentLine = editorState.selection.cursorLine + 1
+        gutterView.externallyModifiedLines = editorState.externallyModifiedLines
 
         // Word Wrap 시 거터에 동적 행 높이 제공자 연결
         // 클로저 내에서 현재 textView.bounds.width를 사용해야 창 크기 변경 시에도 올바르게 동작

@@ -47,6 +47,7 @@ final class LoreTextView: NSView {
 
     /// 마킹 텍스트 (IME 조합 중)
     private var _markedText: NSAttributedString?
+    private var markedSelection = NSRange(location: 0, length: 0)
 
     /// 마킹 범위
     private var _markedRange: NSRange = NSRange(location: NSNotFound, length: 0)
@@ -82,6 +83,17 @@ final class LoreTextView: NSView {
     /// 문서 구조 변경 콜백 (행 추가/삭제 시)
     var onDocumentStructureChange: (() -> Void)?
 
+    /// 커서 이동 시 스크롤 요청 콜백 (줄 번호)
+    var onScrollToCursor: ((Int) -> Void)?
+
+    /// IME 조합 중 스크롤 시 commitMarkedText 호출 방지 플래그
+    private(set) var isScrollingForIME: Bool = false
+
+    /// IME 스크롤 플래그 클리어 (스크롤 완료 후 호출)
+    func clearScrollingForIMEFlag() {
+        isScrollingForIME = false
+    }
+
     // MARK: - Initialization
 
     init(editorState: EditorState) {
@@ -112,15 +124,13 @@ final class LoreTextView: NSView {
     // MARK: - State Sync
 
     func syncFromState() {
+        editorState.selection.clampToDocument(editorState.document)
+        updateSelectedRange()
         lineRenderer.font = editorState.configuration.font
         lineRenderer.lineHeightMultiple = editorState.configuration.lineHeightMultiple
         lineRenderer.textColor = AppColors.nsEditorText
         lineRenderer.wordWrapEnabled = editorState.configuration.wordWrap
         lineRenderer.letterSpacing = editorState.configuration.letterSpacing
-
-        #if DEBUG
-        print("[LoreTextView] syncFromState - wordWrap: \(editorState.configuration.wordWrap), lineHeight: \(lineRenderer.lineHeight), letterSpacing: \(lineRenderer.letterSpacing)")
-        #endif
     }
 
     /// 기본 행 높이 반환
@@ -147,33 +157,57 @@ final class LoreTextView: NSView {
         guard let line = editorState.document.getLineObject(lineIndex) else {
             return lineRenderer.lineHeight
         }
+        if let cached = cachedLineHeights[line.id], cached.content == line.content,
+           heightStyleKey == "\(ObjectIdentifier(editorState.document)):\(viewportWidth):\(editorState.configuration.fontName):\(editorState.configuration.fontSize):\(editorState.configuration.lineHeightMultiple):\(editorState.configuration.letterSpacing):\(wordWrapEnabled)" {
+            return cached.height
+        }
         return lineRenderer.calculateHeight(for: line, viewportWidth: viewportWidth)
     }
 
-    /// 특정 행까지의 누적 Y 위치 계산
-    func yPosition(for lineIndex: Int, viewportWidth: CGFloat) -> CGFloat {
-        guard wordWrapEnabled && viewportWidth > 0 else {
-            return CGFloat(lineIndex) * lineRenderer.lineHeight
-        }
+    private var layoutKey: String = ""
+    private var lineOrigins: [CGFloat] = [0]
+    private var heightStyleKey = ""
+    private var cachedLineHeights: [UUID: (content: String, height: CGFloat)] = [:]
 
-        var y: CGFloat = 0
-        for i in 0..<lineIndex {
-            y += rowHeight(for: i, viewportWidth: viewportWidth)
+    private func ensureLineOrigins(viewportWidth: CGFloat) {
+        let config = editorState.configuration
+        let key = "\(ObjectIdentifier(editorState.document)):\(editorState.document.version):\(viewportWidth):\(config.fontName):\(config.fontSize):\(config.lineHeightMultiple):\(config.letterSpacing):\(wordWrapEnabled)"
+        guard key != layoutKey else { return }
+        layoutKey = key
+        let style = "\(ObjectIdentifier(editorState.document)):\(viewportWidth):\(config.fontName):\(config.fontSize):\(config.lineHeightMultiple):\(config.letterSpacing):\(wordWrapEnabled)"
+        if style != heightStyleKey { cachedLineHeights.removeAll(); heightStyleKey = style }
+        lineOrigins = [0]
+        var liveIDs = Set<UUID>()
+        for index in 0..<editorState.document.lineCount {
+            guard let line = editorState.document.getLineObject(index) else { continue }
+            liveIDs.insert(line.id)
+            let height: CGFloat
+            if let cached = cachedLineHeights[line.id], cached.content == line.content { height = cached.height }
+            else {
+                height = rowHeight(for: index, viewportWidth: viewportWidth)
+                cachedLineHeights[line.id] = (line.content, height)
+            }
+            lineOrigins.append(lineOrigins.last! + height)
         }
-        return y
+        cachedLineHeights = cachedLineHeights.filter { liveIDs.contains($0.key) }
     }
 
-    /// 전체 콘텐츠 높이 계산 (Word Wrap 포함)
-    func totalContentHeight(viewportWidth: CGFloat) -> CGFloat {
-        guard wordWrapEnabled && viewportWidth > 0 else {
-            return CGFloat(editorState.document.lineCount) * lineRenderer.lineHeight
-        }
+    func yPosition(for lineIndex: Int, viewportWidth: CGFloat) -> CGFloat {
+        ensureLineOrigins(viewportWidth: viewportWidth)
+        return lineOrigins[max(0, min(lineIndex, lineOrigins.count - 1))]
+    }
 
-        var totalHeight: CGFloat = 0
-        for i in 0..<editorState.document.lineCount {
-            totalHeight += rowHeight(for: i, viewportWidth: viewportWidth)
-        }
-        return totalHeight
+    func totalContentHeight(viewportWidth: CGFloat) -> CGFloat {
+        ensureLineOrigins(viewportWidth: viewportWidth)
+        return lineOrigins.last ?? lineRenderer.lineHeight
+    }
+
+    var caretRect: CGRect {
+        let cursor = editorState.selection.clampPosition(editorState.selection.cursor, in: editorState.document)
+        let width = bounds.width - textLeftPadding
+        return lineRenderer.caretRect(in: editorState.document.getLine(cursor.line) ?? "",
+                                     column: cursor.column, viewportWidth: width)
+            .offsetBy(dx: textLeftPadding, dy: yPosition(for: cursor.line, viewportWidth: width))
     }
 
     // MARK: - Coordinate System
@@ -202,10 +236,7 @@ final class LoreTextView: NSView {
             drawWithFixedHeight(dirtyRect: dirtyRect, context: context, document: document, selection: selection)
         }
 
-        // 마킹 텍스트 렌더링 (IME)
-        if let marked = _markedText, marked.length > 0 {
-            drawMarkedText(marked, in: context)
-        }
+        // 마킹 텍스트 렌더링은 renderLineWithMarkedText에서 처리됨
     }
 
     /// 고정 행 높이로 그리기 (Word Wrap 비활성화)
@@ -250,13 +281,25 @@ final class LoreTextView: NSView {
                 )
             }
 
-            // 텍스트 렌더링
-            lineRenderer.render(
-                line: line,
-                at: origin,
-                in: context,
-                viewportWidth: bounds.width - textLeftPadding
-            )
+            // 텍스트 렌더링 (마킹 텍스트가 있는 행은 분리 렌더링)
+            if lineIndex == selection.cursor.line,
+               let marked = _markedText, marked.length > 0 {
+                renderLineWithMarkedText(
+                    line: line,
+                    markedText: marked,
+                    cursorColumn: selection.cursor.column,
+                    at: origin,
+                    in: context,
+                    viewportWidth: bounds.width - textLeftPadding
+                )
+            } else {
+                lineRenderer.render(
+                    line: line,
+                    at: origin,
+                    in: context,
+                    viewportWidth: bounds.width - textLeftPadding
+                )
+            }
         }
 
         // 커서 렌더링
@@ -348,13 +391,25 @@ final class LoreTextView: NSView {
                 )
             }
 
-            // 텍스트 렌더링
-            lineRenderer.render(
-                line: line,
-                at: origin,
-                in: context,
-                viewportWidth: viewportWidth
-            )
+            // 텍스트 렌더링 (마킹 텍스트가 있는 행은 분리 렌더링)
+            if lineIndex == selection.cursor.line,
+               let marked = _markedText, marked.length > 0 {
+                renderLineWithMarkedText(
+                    line: line,
+                    markedText: marked,
+                    cursorColumn: selection.cursor.column,
+                    at: origin,
+                    in: context,
+                    viewportWidth: viewportWidth
+                )
+            } else {
+                lineRenderer.render(
+                    line: line,
+                    at: origin,
+                    in: context,
+                    viewportWidth: viewportWidth
+                )
+            }
 
             // 커서 렌더링 + 캐시 업데이트
             if lineIndex == selection.cursor.line {
@@ -392,159 +447,28 @@ final class LoreTextView: NSView {
         _cachedCursorLineHeight = lineHeight
         _cursorCacheKey = cacheKey
 
-        // 래핑된 줄 내에서의 위치 계산
-        let content = line.content
-        let cursorColumn = min(column, content.count)
-
-        if wordWrapEnabled && viewportWidth > 0 && !content.isEmpty {
-            let attributedString = NSAttributedString(string: content, attributes: [
-                .font: editorState.configuration.font,
-                .foregroundColor: AppColors.nsEditorText
-            ])
-            let typesetter = CTTypesetterCreateWithAttributedString(attributedString)
-            let stringLength = attributedString.length
-
-            var tempStart = 0
-            var wrappedLineIndex = 0
-
-            while tempStart < stringLength {
-                let lineLength = CTTypesetterSuggestLineBreak(typesetter, tempStart, Double(viewportWidth))
-                guard lineLength > 0 else { break }
-
-                let lineEnd = tempStart + lineLength
-                let isLastLine = (lineEnd >= stringLength)
-
-                let inRange: Bool
-                if isLastLine {
-                    inRange = cursorColumn >= tempStart && cursorColumn <= lineEnd
-                } else {
-                    inRange = cursorColumn >= tempStart && cursorColumn < lineEnd
-                }
-
-                if inRange {
-                    _cachedWrappedLineIndex = wrappedLineIndex
-                    let offsetInLine = cursorColumn - tempStart
-                    let lineText = String(content.dropFirst(tempStart).prefix(offsetInLine))
-                    _cachedCursorXInLine = lineRenderer.measureWidth(of: lineText)
-                    return
-                }
-
-                tempStart = lineEnd
-                wrappedLineIndex += 1
-            }
-
-            // 찾지 못한 경우 마지막 줄 끝
-            _cachedWrappedLineIndex = max(0, wrappedLineIndex - 1)
-            _cachedCursorXInLine = lineRenderer.measureWidth(of: content)
-        } else {
-            _cachedWrappedLineIndex = 0
-            _cachedCursorXInLine = lineRenderer.measureWidth(of: String(content.prefix(cursorColumn)))
-        }
+        let rect = lineRenderer.caretRect(in: line.content, column: column, viewportWidth: viewportWidth)
+        _cachedWrappedLineIndex = Int(rect.minY / lineRenderer.lineHeight)
+        _cachedCursorXInLine = rect.minX
     }
 
-    private func drawMarkedText(_ markedText: NSAttributedString, in context: CGContext) {
-        let cursorLine = editorState.selection.cursor.line
-        let cursorColumn = editorState.selection.cursor.column
-
-        guard let line = editorState.document.getLineObject(cursorLine) else { return }
-
-        let singleLineHeight = lineRenderer.lineHeight
-        let viewportWidth = bounds.width - textLeftPadding
-
-        // Word Wrap 활성화 시 캐시된 값 사용
-        let y: CGFloat
-        let cursorX: CGFloat
-
-        if wordWrapEnabled && viewportWidth > 0 {
-            // 캐시가 유효한지 확인
-            let cacheKey = "\(cursorLine):\(cursorColumn):\(Int(viewportWidth))"
-            if cacheKey == _cursorCacheKey {
-                // 캐시된 값 사용: 행의 Y + 래핑된 줄 내 오프셋
-                y = _cachedCursorLineY + CGFloat(_cachedWrappedLineIndex) * singleLineHeight
-                cursorX = _cachedCursorXInLine
-            } else {
-                // 캐시가 유효하지 않으면 폴백 계산
-                var lineY = yPosition(for: cursorLine, viewportWidth: viewportWidth)
-                var xInLine: CGFloat = 0
-                let content = line.content
-
-                if !content.isEmpty {
-                    let attributedString = NSAttributedString(string: content, attributes: [
-                        .font: editorState.configuration.font,
-                        .foregroundColor: AppColors.nsEditorText
-                    ])
-                    let typesetter = CTTypesetterCreateWithAttributedString(attributedString)
-                    let stringLength = attributedString.length
-
-                    var tempStart = 0
-                    let safeColumn = min(cursorColumn, content.count)
-
-                    while tempStart < stringLength {
-                        let lineLength = CTTypesetterSuggestLineBreak(typesetter, tempStart, Double(viewportWidth))
-                        guard lineLength > 0 else { break }
-
-                        let lineEnd = tempStart + lineLength
-                        let isLastLine = (lineEnd >= stringLength)
-
-                        let inRange: Bool
-                        if isLastLine {
-                            inRange = safeColumn >= tempStart && safeColumn <= lineEnd
-                        } else {
-                            inRange = safeColumn >= tempStart && safeColumn < lineEnd
-                        }
-
-                        if inRange {
-                            let offsetInLine = safeColumn - tempStart
-                            let lineText = String(content.dropFirst(tempStart).prefix(offsetInLine))
-                            xInLine = lineRenderer.measureWidth(of: lineText)
-                            break
-                        }
-
-                        lineY += singleLineHeight
-                        tempStart = lineEnd
-                    }
-                }
-
-                y = lineY
-                cursorX = xInLine
-            }
-        } else {
-            y = CGFloat(cursorLine) * singleLineHeight
-            let safeColumn = min(cursorColumn, line.content.count)
-            cursorX = lineRenderer.measureWidth(of: String(line.content.prefix(safeColumn)))
-        }
-
-        let origin = CGPoint(x: textLeftPadding + cursorX, y: y)
-
-        // 마킹 텍스트 배경
-        let textSize = markedText.size()
-        let bgRect = CGRect(
-            x: origin.x,
-            y: origin.y,
-            width: textSize.width,
-            height: singleLineHeight
-        )
-        context.setFillColor(NSColor.selectedTextBackgroundColor.withAlphaComponent(0.3).cgColor)
-        context.fill(bgRect)
-
-        // 마킹 텍스트 그리기
-        context.saveGState()
-
-        // isFlipped = true인 NSView에서 Core Text 사용 시 텍스트 매트릭스 반전 필요
-        context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
-        context.textPosition = CGPoint(x: origin.x, y: origin.y + lineRenderer.baselineOffset)
-
-        let ctLine = CTLineCreateWithAttributedString(markedText)
-        CTLineDraw(ctLine, context)
-
-        // 밑줄
-        context.setStrokeColor(NSColor.labelColor.cgColor)
-        context.setLineWidth(1)
-        context.move(to: CGPoint(x: origin.x, y: origin.y + singleLineHeight - 2))
-        context.addLine(to: CGPoint(x: origin.x + textSize.width, y: origin.y + singleLineHeight - 2))
-        context.strokePath()
-
-        context.restoreGState()
+    /// 마킹 텍스트가 있는 행 렌더링 (커서 위치에서 분리)
+    /// 커서 전 텍스트 + 마킹 텍스트 + 커서 후 텍스트 순서로 렌더링
+    private func renderLineWithMarkedText(
+        line: TextLine,
+        markedText: NSAttributedString,
+        cursorColumn: Int,
+        at origin: CGPoint,
+        in context: CGContext,
+        viewportWidth: CGFloat
+    ) {
+        let selection = editorState.selection.range.normalized
+        let insertionColumn = selection.start.line == editorState.selection.cursor.line ? selection.start.column : cursorColumn
+        let before = String(line.content.prefix(max(0, min(insertionColumn, line.content.count))))
+        let endColumn = selection.end.line == editorState.selection.cursor.line ? selection.end.column : cursorColumn
+        let after = String(line.content.dropFirst(max(0, min(endColumn, line.content.count))))
+        lineRenderer.renderComposition(before: before, marked: markedText.string, after: after,
+                                       at: origin, in: context, viewportWidth: viewportWidth)
     }
 
     // MARK: - Cursor Blink
@@ -598,19 +522,125 @@ final class LoreTextView: NSView {
 
     override func becomeFirstResponder() -> Bool {
         resetCursorBlink()
+        // 표준화된 Undo 시스템에 포커스 알림
+        TextUndoHistoryManager.shared.setFocusedArea(.editor)
         return super.becomeFirstResponder()
     }
 
     override func resignFirstResponder() -> Bool {
+        // 포커스를 잃을 때 조합 중인 텍스트 확정 (notifyTextChange 없이)
+        // 탭 전환 시에는 EditorContainerView가 캐시를 관리하므로 여기서 콜백 호출 불필요
+        commitMarkedTextIfNeeded()
+
         stopCursorBlink()
         showCursor = false
         needsDisplay = true
         return super.resignFirstResponder()
     }
 
+    // MARK: - IME Helper
+
+    /// 조합 중인 텍스트를 확정하지 않고 버림 (탭 전환 시 사용)
+    func discardMarkedText() {
+        _markedText = nil
+        _markedRange = NSRange(location: NSNotFound, length: 0)
+        inputContext?.discardMarkedText()
+        // 입력 컨텍스트 완전히 무효화하여 다음 입력 시 깨끗한 상태로 시작
+        inputContext?.invalidateCharacterCoordinates()
+        needsDisplay = true
+    }
+
+    /// 입력 컨텍스트를 완전히 리셋 (탭 전환 후 새 탭에서 깨끗한 IME 상태로 시작)
+    func resetInputContext() {
+        // 마킹 상태 완전 초기화
+        _markedText = nil
+        _markedRange = NSRange(location: NSNotFound, length: 0)
+
+        // 입력 컨텍스트에서 마킹 텍스트 버리기
+        inputContext?.discardMarkedText()
+
+        // 입력 소스 비활성화 후 재활성화하여 IME 상태 리셋
+        inputContext?.deactivate()
+        inputContext?.activate()
+
+        // 좌표 정보 무효화
+        inputContext?.invalidateCharacterCoordinates()
+    }
+
+    /// 조합 중인 텍스트를 조용히 확정 (onTextChange 콜백 없이)
+    /// 포커스를 잃을 때 또는 탭 전환 시 사용 - SwiftUI 상태 충돌 방지
+    func commitMarkedTextSilently() {
+        guard hasMarkedText(), let marked = _markedText, marked.length > 0 else { return }
+
+        let text = marked.string
+
+        // 마킹 상태 클리어
+        _markedText = nil
+        _markedRange = NSRange(location: NSNotFound, length: 0)
+
+        // 직접 텍스트 삽입 (콜백 없이)
+        let beforeLine = editorState.selection.cursor.line
+        let beforeCount = editorState.document.lineCount
+        editorState.insertText(text)
+        let afterCount = editorState.document.lineCount
+        let currentLine = editorState.selection.cursor.line
+
+        // 캐시 무효화 및 UI 업데이트
+        invalidateRenderCache(fromLine: beforeLine, toLine: currentLine + abs(afterCount - beforeCount))
+        updateSelectedRange()
+        needsDisplay = true
+
+        // notifyTextChange() 호출 안함 - 의도적
+        // 탭 전환 시 EditorContainerView.onChange(of: tabManager.selectedTab?.url)에서
+        // 이미 text를 캐시에 저장하기 때문
+
+        if beforeCount != afterCount {
+            onDocumentStructureChange?()
+        }
+    }
+
+    /// 조합 중인 텍스트가 있으면 현재 커서 위치에서 확정
+    /// 마우스 클릭 등 사용자 인터랙션 시에만 사용
+    func commitMarkedTextIfNeeded() {
+        guard hasMarkedText(), let marked = _markedText, marked.length > 0 else { return }
+
+        let text = marked.string
+
+        // 마킹 상태 먼저 클리어 (중복 호출 방지)
+        _markedText = nil
+        _markedRange = NSRange(location: NSNotFound, length: 0)
+
+        // 입력 컨텍스트에게 마킹 취소 알림 (시스템이 insertText 호출하지 않도록)
+        inputContext?.discardMarkedText()
+
+        // 직접 텍스트 삽입
+        let beforeLine = editorState.selection.cursor.line
+        let beforeCount = editorState.document.lineCount
+        editorState.insertText(text)
+        let afterCount = editorState.document.lineCount
+        let currentLine = editorState.selection.cursor.line
+
+        // 캐시 무효화 및 UI 업데이트
+        invalidateRenderCache(fromLine: beforeLine, toLine: currentLine + abs(afterCount - beforeCount))
+        updateSelectedRange()
+        needsDisplay = true
+        notifyTextChange()
+
+        if beforeCount != afterCount {
+            onDocumentStructureChange?()
+        }
+    }
+
     // MARK: - Mouse Events
 
     override func mouseDown(with event: NSEvent) {
+        // 조합 중인 텍스트가 있으면 현재 커서 위치에서 확정 (클릭 전에 처리)
+        // makeFirstResponder 전에 처리해야 시스템이 잘못된 위치에 삽입하지 않음
+        if hasMarkedText() {
+            commitMarkedTextIfNeeded()
+            inputContext?.discardMarkedText()
+        }
+
         window?.makeFirstResponder(self)
 
         let location = convert(event.locationInWindow, from: nil)
@@ -700,33 +730,26 @@ final class LoreTextView: NSView {
         xPosition: CGFloat,
         viewportWidth: CGFloat
     ) -> Int {
-        guard !lineContent.isEmpty else { return 0 }
-
-        // CTFramesetter로 래핑된 줄 정보 가져오기
-        let attributedString = NSAttributedString(string: lineContent, attributes: [
-            .font: editorState.configuration.font,
-            .foregroundColor: AppColors.nsEditorText
-        ])
-        let framesetter = CTFramesetterCreateWithAttributedString(attributedString)
-
-        let path = CGPath(rect: CGRect(x: 0, y: 0, width: viewportWidth, height: .greatestFiniteMagnitude), transform: nil)
-        let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), path, nil)
-
-        guard let lines = CTFrameGetLines(frame) as? [CTLine], !lines.isEmpty else {
-            return lineRenderer.characterIndex(at: max(0, xPosition), in: lineContent)
-        }
-
-        // 클릭한 래핑된 줄이 유효한지 확인
-        let targetLineIndex = min(wrappedLineIndex, lines.count - 1)
-        let ctLine = lines[targetLineIndex]
-
-        // 해당 줄에서 문자 인덱스 계산
-        let index = CTLineGetStringIndexForPosition(ctLine, CGPoint(x: max(0, xPosition), y: 0))
-        return max(0, min(index, lineContent.count))
+        lineRenderer.characterIndex(at: xPosition, in: lineContent,
+                                    visualRow: wrappedLineIndex, viewportWidth: viewportWidth)
     }
 
     private func selectWordAtCursor() {
-        // TODO: 단어 경계 찾기 구현
+        let cursor = editorState.selection.cursor
+        let text = editorState.document.getLine(cursor.line) ?? ""
+        let characters = Array(text)
+        guard !characters.isEmpty else { return }
+        let pivot = min(cursor.column, characters.count - 1)
+        let whitespace = characters[pivot].isWhitespace
+        var start = pivot
+        var end = pivot + 1
+        while start > 0 && characters[start - 1].isWhitespace == whitespace { start -= 1 }
+        while end < characters.count && characters[end].isWhitespace == whitespace { end += 1 }
+        editorState.selection.select(from: TextPosition(line: cursor.line, column: start),
+                                     to: TextPosition(line: cursor.line, column: end))
+        updateSelectedRange()
+        needsDisplay = true
+        notifyCursorChange()
     }
 
     private func selectLineAtCursor() {
@@ -737,60 +760,57 @@ final class LoreTextView: NSView {
         notifyCursorChange()
     }
 
+    // MARK: - Undo/Redo Actions (macOS Edit 메뉴에서 호출)
+
+    /// macOS Edit 메뉴의 Undo (Cmd+Z)
+    @objc func undo(_ sender: Any?) {
+        #if DEBUG
+        print("[LoreTextView] undo: action received")
+        #endif
+
+        // 조합 중인 텍스트가 있으면 먼저 취소
+        if hasMarkedText() {
+            inputContext?.discardMarkedText()
+            unmarkText()
+            needsDisplay = true
+            return  // 조합 취소만 하고 종료 (Undo는 다음 Cmd+Z에서)
+        }
+
+        performUndo()
+    }
+
+    /// macOS Edit 메뉴의 Redo (Cmd+Shift+Z)
+    @objc func redo(_ sender: Any?) {
+        #if DEBUG
+        print("[LoreTextView] redo: action received")
+        #endif
+
+        // 조합 중인 텍스트가 있으면 먼저 취소
+        if hasMarkedText() {
+            inputContext?.discardMarkedText()
+            unmarkText()
+            needsDisplay = true
+            return  // 조합 취소만 하고 종료
+        }
+
+        performRedo()
+    }
+
     // MARK: - Keyboard Events
 
     override func keyDown(with event: NSEvent) {
-        // keyCode 51 = 백스페이스
-        if event.keyCode == 51 {
-            if event.modifierFlags.contains(.command) {
-                // Cmd+백스페이스: 행 시작까지 삭제
-                // 조합 중인 문자가 있으면 취소
-                if hasMarkedText() {
-                    unmarkText()
-                }
-                performDeleteToLineStart()
-                return
-            } else if event.modifierFlags.contains(.option) {
-                // Option+백스페이스: 단어 단위 삭제
-                // 조합 중인 문자가 있으면 취소
-                if hasMarkedText() {
-                    unmarkText()
-                }
-                performDeleteWordBackward()
-                return
-            }
+        // First Responder가 아니면 키 이벤트 무시
+        guard window?.firstResponder === self else {
+            super.keyDown(with: event)
+            return
         }
 
-        // Option+방향키: 행 이동/복제
-        // keyCode 126 = 위, 125 = 아래
-        if event.modifierFlags.contains(.option) {
-            let isShiftPressed = event.modifierFlags.contains(.shift)
-
-            if event.keyCode == 126 {  // 위 화살표
-                if isShiftPressed {
-                    // Option+Shift+위: 행 위로 복제
-                    performDuplicateLineUp()
-                } else {
-                    // Option+위: 행 위로 이동
-                    performMoveLineUp()
-                }
-                return
-            } else if event.keyCode == 125 {  // 아래 화살표
-                if isShiftPressed {
-                    // Option+Shift+아래: 행 아래로 복제
-                    performDuplicateLineDown()
-                } else {
-                    // Option+아래: 행 아래로 이동
-                    performMoveLineDown()
-                }
-                return
-            }
+        if let action = KeyboardShortcutManager.shared.action(matching: event), performConfiguredShortcut(action) {
+            return
         }
 
         // Cmd 키 조합 처리
         if event.modifierFlags.contains(.command) {
-            let isShiftPressed = event.modifierFlags.contains(.shift)
-
             switch event.charactersIgnoringModifiers {
             case "a":
                 // Cmd+A: 전체 선택
@@ -815,15 +835,8 @@ final class LoreTextView: NSView {
                 performCut()
                 return
 
-            case "z":
-                if isShiftPressed {
-                    // Cmd+Shift+Z: Redo
-                    performRedo()
-                } else {
-                    // Cmd+Z: Undo
-                    performUndo()
-                }
-                return
+            // Cmd+Z/Cmd+Shift+Z는 macOS 기본 Edit 메뉴에서 처리하도록 함
+            // doCommand에서 undo:/redo: selector를 받아서 처리
 
             default:
                 break
@@ -836,6 +849,26 @@ final class LoreTextView: NSView {
         }
         // inputContext가 처리하지 않은 경우 기본 처리
         super.keyDown(with: event)
+    }
+
+    @discardableResult
+    func performConfiguredShortcut(_ action: ShortcutAction) -> Bool {
+        switch action {
+        case .moveLineUp, .moveLineDown, .duplicateLineUp, .duplicateLineDown,
+             .deleteWordBackward, .deleteToLineStart:
+            commitMarkedTextIfNeeded()
+        default: return false
+        }
+        switch action {
+        case .moveLineUp: performMoveLineUp()
+        case .moveLineDown: performMoveLineDown()
+        case .duplicateLineUp: performDuplicateLineUp()
+        case .duplicateLineDown: performDuplicateLineDown()
+        case .deleteWordBackward: performDeleteWordBackward()
+        case .deleteToLineStart: performDeleteToLineStart()
+        default: return false
+        }
+        return true
     }
 
     // MARK: - Clipboard Operations
@@ -856,13 +889,14 @@ final class LoreTextView: NSView {
         let pasteboard = NSPasteboard.general
         guard let text = pasteboard.string(forType: .string) else { return }
 
-        let cursorLine = editorState.selection.cursor.line
+        let beforeLine = editorState.selection.cursor.line
         let beforeCount = editorState.document.lineCount
         editorState.paste(text)
         let afterCount = editorState.document.lineCount
+        let currentLine = editorState.selection.cursor.line
 
         // 변경된 행의 렌더링 캐시 무효화
-        invalidateRenderCache(fromLine: cursorLine, toLine: cursorLine + (afterCount - beforeCount))
+        invalidateRenderCache(fromLine: beforeLine, toLine: currentLine + (afterCount - beforeCount))
 
         updateSelectedRange()
         resetCursorBlink()
@@ -870,6 +904,9 @@ final class LoreTextView: NSView {
 
         notifyTextChange()
         notifyCursorChange()
+
+        // 붙여넣기 후 커서 위치로 스크롤
+        onScrollToCursor?(currentLine)
 
         if beforeCount != afterCount {
             onDocumentStructureChange?()
@@ -886,8 +923,8 @@ final class LoreTextView: NSView {
         pasteboard.setString(text, forType: .string)
 
         // 캐시 무효화 및 UI 업데이트
-        let cursorLine = editorState.selection.cursor.line
-        invalidateRenderCache(fromLine: cursorLine, toLine: cursorLine)
+        let currentLine = editorState.selection.cursor.line
+        invalidateRenderCache(fromLine: currentLine, toLine: currentLine)
 
         updateSelectedRange()
         resetCursorBlink()
@@ -895,6 +932,10 @@ final class LoreTextView: NSView {
 
         notifyTextChange()
         notifyCursorChange()
+
+        // 잘라내기 후 커서 위치로 스크롤
+        onScrollToCursor?(currentLine)
+
         onDocumentStructureChange?()
     }
 
@@ -921,6 +962,9 @@ final class LoreTextView: NSView {
 
         notifyTextChange()
         notifyCursorChange()
+
+        // 삭제 후 커서 위치로 스크롤
+        onScrollToCursor?(currentLine)
 
         if beforeCount != afterCount {
             onDocumentStructureChange?()
@@ -950,6 +994,9 @@ final class LoreTextView: NSView {
 
         notifyTextChange()
         notifyCursorChange()
+
+        // 삭제 후 커서 위치로 스크롤
+        onScrollToCursor?(currentLine)
 
         if beforeCount != afterCount {
             onDocumentStructureChange?()
@@ -1050,8 +1097,17 @@ final class LoreTextView: NSView {
 
     /// Undo 실행 (Cmd+Z)
     private func performUndo() {
+        #if DEBUG
+        print("[LoreTextView] performUndo: canUndo=\(editorState.canUndo), undoStack=\(editorState.undoCount), redoStack=\(editorState.redoCount)")
+        #endif
+
         let beforeCount = editorState.document.lineCount
-        guard editorState.undo() else { return }
+        guard editorState.undo() else {
+            #if DEBUG
+            print("[LoreTextView] performUndo: undo() returned false")
+            #endif
+            return
+        }
 
         let afterCount = editorState.document.lineCount
 
@@ -1072,8 +1128,17 @@ final class LoreTextView: NSView {
 
     /// Redo 실행 (Cmd+Shift+Z)
     private func performRedo() {
+        #if DEBUG
+        print("[LoreTextView] performRedo: canRedo=\(editorState.canRedo), undoStack=\(editorState.undoCount), redoStack=\(editorState.redoCount)")
+        #endif
+
         let beforeCount = editorState.document.lineCount
-        guard editorState.redo() else { return }
+        guard editorState.redo() else {
+            #if DEBUG
+            print("[LoreTextView] performRedo: redo() returned false")
+            #endif
+            return
+        }
 
         let afterCount = editorState.document.lineCount
 
@@ -1105,6 +1170,18 @@ final class LoreTextView: NSView {
         }
     }
 
+    func performEditorCommand(_ command: EditorCommand) {
+        let version = editorState.document.version
+        editorState.execute(command)
+        lineRenderer.invalidateAllCache()
+        updateSelectedRange()
+        needsDisplay = true
+        if editorState.document.version != version { notifyTextChange() }
+        notifyCursorChange()
+        onDocumentStructureChange?()
+        onScrollToCursor?(editorState.selection.cursor.line)
+    }
+
     private func notifyTextChange() {
         onTextChange?(editorState.getText())
     }
@@ -1117,17 +1194,12 @@ final class LoreTextView: NSView {
     }
 
     private func updateSelectedRange() {
-        let selection = editorState.selection
-        let start = editorState.document.offsetFromPosition(
-            line: selection.range.normalized.start.line,
-            column: selection.range.normalized.start.column
-        )
-        let end = editorState.document.offsetFromPosition(
-            line: selection.range.normalized.end.line,
-            column: selection.range.normalized.end.column
-        )
+        let range = editorState.selection.range.normalized
+        let start = editorState.document.utf16Offset(from: range.start)
+        let end = editorState.document.utf16Offset(from: range.end)
         _selectedRange = NSRange(location: start, length: end - start)
     }
+
 }
 
 // MARK: - NSTextInputClient
@@ -1136,6 +1208,7 @@ extension LoreTextView: NSTextInputClient {
     func insertText(_ string: Any, replacementRange: NSRange) {
         guard editorState.isEditable else { return }
 
+        let wasComposing = hasMarkedText()
         // 마킹 텍스트 클리어
         _markedText = nil
         _markedRange = NSRange(location: NSNotFound, length: 0)
@@ -1149,13 +1222,19 @@ extension LoreTextView: NSTextInputClient {
             return
         }
 
-        let cursorLine = editorState.selection.cursor.line
+        if !wasComposing && replacementRange.location != NSNotFound {
+            let start = editorState.document.positionFromUTF16Offset(replacementRange.location)
+            let end = editorState.document.positionFromUTF16Offset(replacementRange.location + replacementRange.length)
+            editorState.selection.select(from: start, to: end)
+        }
+        let beforeLine = editorState.selection.cursor.line
         let beforeCount = editorState.document.lineCount
         editorState.insertText(text)
         let afterCount = editorState.document.lineCount
+        let currentLine = editorState.selection.cursor.line
 
         // 변경된 행의 렌더링 캐시 무효화
-        invalidateRenderCache(fromLine: cursorLine, toLine: cursorLine + (afterCount - beforeCount))
+        invalidateRenderCache(fromLine: beforeLine, toLine: currentLine + (afterCount - beforeCount))
 
         updateSelectedRange()
         resetCursorBlink()
@@ -1164,12 +1243,22 @@ extension LoreTextView: NSTextInputClient {
         notifyTextChange()
         notifyCursorChange()
 
+        // 텍스트 입력 후 커서 위치로 스크롤
+        onScrollToCursor?(currentLine)
+
         if beforeCount != afterCount {
             onDocumentStructureChange?()
         }
     }
 
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        guard editorState.isEditable else { return }
+        if !hasMarkedText(), replacementRange.location != NSNotFound {
+            editorState.selection.select(
+                from: editorState.document.positionFromUTF16Offset(replacementRange.location),
+                to: editorState.document.positionFromUTF16Offset(replacementRange.location + replacementRange.length))
+            updateSelectedRange()
+        }
         // 항상 에디터 폰트와 색상으로 마킹 텍스트 생성
         let markedString: String
         if let attrString = string as? NSAttributedString {
@@ -1185,7 +1274,15 @@ extension LoreTextView: NSTextInputClient {
                 .font: editorState.configuration.font,
                 .foregroundColor: AppColors.nsEditorText
             ])
-            _markedRange = NSRange(location: self._selectedRange.location, length: markedString.count)
+            _markedRange = NSRange(location: editorState.document.utf16Offset(from: editorState.selection.range.normalized.start), length: markedString.utf16.count)
+            let location = max(0, min(selectedRange.location, markedString.utf16.count))
+            markedSelection = NSRange(location: location, length: min(selectedRange.length, markedString.utf16.count - location))
+
+            // IME 조합 시작할 때 커서 위치로 스크롤 (커서가 화면 밖에 있을 경우)
+            // 이 스크롤은 IME 조합의 일부이므로 commitMarkedText 호출 방지
+            // isScrollingForIME는 handleScrollChange에서 리셋됨
+            isScrollingForIME = true
+            onScrollToCursor?(editorState.selection.cursor.line)
         } else {
             _markedText = nil
             _markedRange = NSRange(location: NSNotFound, length: 0)
@@ -1201,7 +1298,10 @@ extension LoreTextView: NSTextInputClient {
     }
 
     func selectedRange() -> NSRange {
-        _selectedRange
+        if hasMarkedText() {
+            return NSRange(location: _markedRange.location + markedSelection.location, length: markedSelection.length)
+        }
+        return _selectedRange
     }
 
     func markedRange() -> NSRange {
@@ -1213,20 +1313,18 @@ extension LoreTextView: NSTextInputClient {
     }
 
     func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
-        let text = editorState.getText()
-        guard range.location != NSNotFound,
-              range.location >= 0,
-              range.location + range.length <= text.count else {
-            return nil
+        var content = editorState.getText()
+        if let marked = _markedText {
+            let selected = editorState.selection.range.normalized
+            let start = editorState.document.utf16Offset(from: selected.start)
+            let end = editorState.document.utf16Offset(from: selected.end)
+            content = (content as NSString).replacingCharacters(in: NSRange(location: start, length: end - start), with: marked.string)
         }
-
-        let start = text.index(text.startIndex, offsetBy: range.location)
-        let end = text.index(start, offsetBy: range.length)
-        let substring = String(text[start..<end])
-
-        return NSAttributedString(string: substring, attributes: [
-            .font: editorState.configuration.font
-        ])
+        let text = content as NSString
+        guard range.location != NSNotFound, range.location >= 0,
+              range.location <= text.length, range.length <= text.length - range.location else { return nil }
+        actualRange?.pointee = range
+        return NSAttributedString(string: text.substring(with: range), attributes: [.font: editorState.configuration.font])
     }
 
     func validAttributesForMarkedText() -> [NSAttributedString.Key] {
@@ -1234,91 +1332,70 @@ extension LoreTextView: NSTextInputClient {
     }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-        let position = editorState.document.positionFromOffset(range.location)
-        let singleLineHeight = lineRenderer.lineHeight
-        let viewportWidth = bounds.width - textLeftPadding
-
-        let lineContent = editorState.document.getLine(position.line) ?? ""
-        let safeColumn = min(position.column, lineContent.count)
-
-        // Word Wrap 활성화 시 캐시된 값 사용
-        var y: CGFloat
-        var cursorX: CGFloat
-
-        if wordWrapEnabled && viewportWidth > 0 {
-            // 현재 커서 위치와 일치하는 경우 캐시 사용
-            let cursorLine = editorState.selection.cursor.line
-            let cursorColumn = editorState.selection.cursor.column
-            let cacheKey = "\(cursorLine):\(cursorColumn):\(Int(viewportWidth))"
-
-            if position.line == cursorLine && safeColumn == cursorColumn && cacheKey == _cursorCacheKey {
-                // 캐시된 값 사용: 행의 Y + 래핑된 줄 내 오프셋
-                y = _cachedCursorLineY + CGFloat(_cachedWrappedLineIndex) * singleLineHeight
-                cursorX = _cachedCursorXInLine
-            } else if !lineContent.isEmpty {
-                // 폴백: 직접 계산
-                y = yPosition(for: position.line, viewportWidth: viewportWidth)
-
-                let attributedString = NSAttributedString(string: lineContent, attributes: [
-                    .font: editorState.configuration.font,
-                    .foregroundColor: AppColors.nsEditorText
-                ])
-                let typesetter = CTTypesetterCreateWithAttributedString(attributedString)
-                let stringLength = attributedString.length
-
-                var tempStart = 0
-                var offsetInLine = safeColumn
-
-                while tempStart < stringLength {
-                    let lineLength = CTTypesetterSuggestLineBreak(typesetter, tempStart, Double(viewportWidth))
-                    guard lineLength > 0 else { break }
-
-                    let lineEnd = tempStart + lineLength
-                    let isLastLine = (lineEnd >= stringLength)
-
-                    let inRange: Bool
-                    if isLastLine {
-                        inRange = safeColumn >= tempStart && safeColumn <= lineEnd
-                    } else {
-                        inRange = safeColumn >= tempStart && safeColumn < lineEnd
-                    }
-
-                    if inRange {
-                        offsetInLine = safeColumn - tempStart
-                        break
-                    }
-
-                    y += singleLineHeight
-                    tempStart = lineEnd
-                }
-
-                let lineText = String(lineContent.dropFirst(tempStart).prefix(offsetInLine))
-                cursorX = lineRenderer.measureWidth(of: lineText)
-            } else {
-                y = yPosition(for: position.line, viewportWidth: viewportWidth)
-                cursorX = 0
-            }
-        } else {
-            y = CGFloat(position.line) * singleLineHeight
-            cursorX = lineRenderer.measureWidth(of: String(lineContent.prefix(safeColumn)))
-        }
-
-        let localPoint = CGPoint(x: textLeftPadding + cursorX, y: y + singleLineHeight)
-        let screenPoint = window?.convertPoint(toScreen: convert(localPoint, to: nil)) ?? .zero
-
-        return NSRect(x: screenPoint.x, y: screenPoint.y, width: 0, height: singleLineHeight)
+        let position = editorState.document.positionFromUTF16Offset(range.location)
+        let width = bounds.width - textLeftPadding
+        let rect = lineRenderer.caretRect(in: editorState.document.getLine(position.line) ?? "",
+                                         column: position.column, viewportWidth: width)
+            .offsetBy(dx: textLeftPadding, dy: yPosition(for: position.line, viewportWidth: width))
+        actualRange?.pointee = NSRange(location: editorState.document.utf16Offset(from: position), length: 0)
+        let windowRect = convert(rect, to: nil)
+        return window?.convertToScreen(windowRect) ?? windowRect
     }
 
     func characterIndex(for point: NSPoint) -> Int {
-        let localPoint = convert(point, from: nil)
-        let position = textPositionAt(point: localPoint)
-        return editorState.document.offsetFromPosition(line: position.line, column: position.column)
+        let windowPoint = window?.convertPoint(fromScreen: point) ?? point
+        let position = textPositionAt(point: convert(windowPoint, from: nil))
+        return editorState.document.utf16Offset(from: position)
     }
 
     override func doCommand(by selector: Selector) {
+        // First Responder가 아니면 명령 무시
+        guard window?.firstResponder === self else {
+            #if DEBUG
+            print("[LoreTextView] doCommand ignored (not first responder): \(selector)")
+            #endif
+            return
+        }
+
         #if DEBUG
         print("[LoreTextView] doCommand: \(selector)")
         #endif
+
+        // 지원하는 명령 목록
+        let supportedCommands: Set<Selector> = [
+            #selector(moveLeft(_:)), #selector(moveRight(_:)),
+            #selector(moveUp(_:)), #selector(moveDown(_:)),
+            #selector(moveLeftAndModifySelection(_:)), #selector(moveRightAndModifySelection(_:)),
+            #selector(moveUpAndModifySelection(_:)), #selector(moveDownAndModifySelection(_:)),
+            #selector(moveToBeginningOfLine(_:)), #selector(moveToEndOfLine(_:)),
+            #selector(moveToBeginningOfDocument(_:)), #selector(moveToEndOfDocument(_:)),
+            #selector(deleteBackward(_:)), #selector(deleteForward(_:)),
+            #selector(insertNewline(_:)), #selector(insertTab(_:)),
+            #selector(selectAll(_:)),
+            #selector(undo(_:)), #selector(redo(_:))
+        ]
+
+        // 지원하지 않는 명령은 무시 (noop 등)
+        guard supportedCommands.contains(selector) else {
+            #if DEBUG
+            print("[LoreTextView] doCommand unsupported: \(selector)")
+            #endif
+            return
+        }
+
+        // 커서 이동 명령인 경우 조합 중인 텍스트 확정
+        let isCursorMovement = [
+            #selector(moveLeft(_:)), #selector(moveRight(_:)),
+            #selector(moveUp(_:)), #selector(moveDown(_:)),
+            #selector(moveLeftAndModifySelection(_:)), #selector(moveRightAndModifySelection(_:)),
+            #selector(moveUpAndModifySelection(_:)), #selector(moveDownAndModifySelection(_:)),
+            #selector(moveToBeginningOfLine(_:)), #selector(moveToEndOfLine(_:)),
+            #selector(moveToBeginningOfDocument(_:)), #selector(moveToEndOfDocument(_:))
+        ].contains(selector)
+
+        if isCursorMovement {
+            commitMarkedTextIfNeeded()
+        }
 
         var textChanged = false
         var structureChanged = false
@@ -1368,6 +1445,12 @@ extension LoreTextView: NSTextInputClient {
             textChanged = true
         case #selector(selectAll(_:)):
             editorState.selectAll()
+        case #selector(undo(_:)):
+            performUndo()
+            return  // 별도 처리 완료
+        case #selector(redo(_:)):
+            performRedo()
+            return  // 별도 처리 완료
         default:
             break
         }
@@ -1389,6 +1472,12 @@ extension LoreTextView: NSTextInputClient {
         resetCursorBlink()
         needsDisplay = true
         notifyCursorChange()
+
+        // 커서가 이동하거나 텍스트가 변경된 경우 스크롤 요청
+        let currentLine = editorState.selection.cursor.line
+        if currentLine != beforeLine || textChanged {
+            onScrollToCursor?(currentLine)
+        }
 
         if textChanged {
             notifyTextChange()

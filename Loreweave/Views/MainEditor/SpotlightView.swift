@@ -2,158 +2,139 @@
 //  SpotlightView.swift
 //  Loreweave
 //
-//  스포트라이트 검색 오버레이
-//  툴바 영역에 항상 표시되며, 클릭 시 제자리에서 확장
+//  스포트라이트 검색
+//  - SpotlightToolbarItem: 툴바에 배치되는 컴팩트 캡슐
+//  - SpotlightExpandedOverlay: 확장된 검색 패널 오버레이
 //
 
 import SwiftUI
 
-/// 스포트라이트 오버레이 (축소/확장 통합)
-/// MainEditorView의 ZStack 상단에 배치
-struct SpotlightOverlay: View {
+// MARK: - Spotlight Toolbar Item
+
+/// 툴바에 배치되는 스포트라이트 컴팩트 버튼
+/// 클릭 시 확장 상태로 전환
+struct SpotlightToolbarItem: View {
+    @Binding var text: String
+    @Binding var isExpanded: Bool
+
+    @State private var isHovered: Bool = false
+
+    var body: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                isExpanded = true
+            }
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AppColors.toolbarIcon)
+
+                Text(text.isEmpty ? L10n.get("toolbar.searchPlaceholder") : text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(text.isEmpty ? AppColors.textTertiary : AppColors.textPrimary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                // 단축키 힌트
+                Text("⌘K")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(AppColors.textTertiary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(isHovered ? AppColors.addButtonHover : AppColors.controlBackground.opacity(0.6))
+                    .cornerRadius(3)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(minWidth: 180)
+        }
+        .buttonStyle(.plain)
+        .glassEffect()
+        .onHover { isHovered = $0 }
+        .help(L10n.get("toolbar.searchPlaceholder"))
+    }
+}
+
+// MARK: - Spotlight Expanded Overlay
+
+/// 확장된 스포트라이트 검색 오버레이
+/// ZStack에서 조건부로 표시
+struct SpotlightExpandedOverlay: View {
     @Binding var text: String
     @Binding var isExpanded: Bool
 
     @FocusState private var isTextFieldFocused: Bool
     @State private var searchResults: [SpotlightSearchResult] = []
-    /// 확장 콘텐츠 표시 여부 (지연 애니메이션용)
-    @State private var showExpandedContent: Bool = false
-    /// 닫기 작업 취소용 ID
+    @State private var showContent: Bool = false
     @State private var closingTaskId: UUID?
 
-    /// 컴팩트 상태 크기 (NavigationButtonsView와 동일한 높이: buttonSize 28 + padding 8 = 36)
-    private let compactWidth: CGFloat = 220
-    private let compactHeight: CGFloat = 36
-
-    /// 확장 상태 크기
-    private let expandedWidth: CGFloat = 400
-    private let expandedHeight: CGFloat = 320
-
-    /// 코너 곡률 (캡슐 형태 - 컴팩트 높이의 절반)
-    private let cornerRadius: CGFloat = 18
-
-    /// 현재 상태에 따른 너비
-    private var currentWidth: CGFloat {
-        isExpanded ? expandedWidth : compactWidth
-    }
-
-    /// 현재 상태에 따른 높이
-    private var currentHeight: CGFloat {
-        isExpanded ? expandedHeight : compactHeight
-    }
+    private let panelWidth: CGFloat = 500
+    private let panelHeight: CGFloat = 360
+    private let cornerRadius: CGFloat = 16
 
     var body: some View {
         ZStack(alignment: .top) {
-            // 확장 시 배경 딤 + 클릭으로 닫기
-            if isExpanded {
-                Color.black.opacity(0.001)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        closeSpotlight()
-                    }
-            }
+            // 배경 딤
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    closeSpotlight()
+                }
 
-            // 스포트라이트 패널 (축소/확장 공유)
-            spotlightPanel
-                .frame(width: currentWidth, height: currentHeight)
-                .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-                .shadow(
-                    color: .black.opacity(isExpanded ? 0.25 : 0.1),
-                    radius: isExpanded ? 20 : 8,
-                    y: isExpanded ? 10 : 4
-                )
-                .contentShape(Rectangle())
-                .gesture(
-                    TapGesture()
-                        .onEnded {
-                            // 컴팩트 상태에서 싱글 클릭으로 확장 + 포커스
-                            if !isExpanded {
-                                expandSpotlight()
-                            }
-                        },
-                    including: .all // 윈도우 드래그 제스처보다 우선
-                )
-                .background {
-                    // 윈도우 드래그 영역에서 제외
-                    WindowDragExclusionView()
+            // 검색 패널
+            WindowDragExclusionWrapper {
+                VStack(spacing: 0) {
+                    searchInputField
+                    Divider()
+                        .padding(.horizontal, 12)
+                    expandedContent
                 }
-                .padding(.top, 8) // 툴바 상단 패딩
+                .frame(width: panelWidth, height: panelHeight)
+                .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                .shadow(color: .black.opacity(0.25), radius: 30, y: 10)
+            }
+            .padding(.top, 80)
+            .scaleEffect(showContent ? 1 : 0.95)
+            .opacity(showContent ? 1 : 0)
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isExpanded)
-        .onChange(of: isExpanded) { _, newValue in
-            if newValue {
-                // 확장 시: 이전 닫기 작업 취소 + 콘텐츠 페이드인
-                closingTaskId = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    guard isExpanded else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        showExpandedContent = true
-                    }
-                }
-            } else {
-                // 축소 시: 즉시 콘텐츠 숨김
-                showExpandedContent = false
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: showContent)
+        .onAppear {
+            showContent = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isTextFieldFocused = true
             }
         }
         .onChange(of: isTextFieldFocused) { _, newValue in
-            // 스포트라이트가 이미 확장된 상태에서만 포커스 변화에 반응
-            // 컴팩트 상태에서는 탭 제스처로만 확장되어야 함
-            guard isExpanded else { return }
-
-            if newValue {
-                // 포커스 획득 시: 닫기 작업 취소
-                closingTaskId = nil
-            } else {
-                // 포커스 해제 시: 지연 후 닫기 (재포커스 시 취소됨)
+            if !newValue {
                 let taskId = UUID()
                 closingTaskId = taskId
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    // 이 작업이 취소되지 않았고 여전히 포커스가 없으면 닫기
                     if closingTaskId == taskId && !isTextFieldFocused {
                         closeSpotlight()
                     }
                 }
+            } else {
+                closingTaskId = nil
             }
         }
         .onExitCommand {
-            if isExpanded {
-                closeSpotlight()
-            }
+            closeSpotlight()
         }
-    }
-
-    // MARK: - Spotlight Panel
-
-    private var spotlightPanel: some View {
-        VStack(spacing: 0) {
-            // 검색 입력 필드 (항상 표시)
-            searchInputField
-
-            // 확장 콘텐츠 (패널 확장 후 페이드인)
-            if isExpanded {
-                Divider()
-                    .padding(.horizontal, 8)
-                    .opacity(showExpandedContent ? 1 : 0)
-
-                expandedContent
-                    .opacity(showExpandedContent ? 1 : 0)
-                    .scaleEffect(showExpandedContent ? 1 : 0.95, anchor: .top)
-            }
-        }
-        .clipped()
     }
 
     // MARK: - Search Input Field
 
     private var searchInputField: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: isExpanded ? 14 : 12, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(AppColors.toolbarIcon)
 
             TextField(L10n.get("toolbar.searchPlaceholder"), text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: isExpanded ? 14 : 13))
+                .font(.system(size: 16))
                 .focused($isTextFieldFocused)
                 .onSubmit {
                     performSearch()
@@ -162,25 +143,22 @@ struct SpotlightOverlay: View {
             if !text.isEmpty {
                 Button(action: { text = "" }) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
+                        .font(.system(size: 14))
                         .foregroundStyle(AppColors.toolbarIcon)
                 }
                 .buttonStyle(.plain)
             }
 
-            if isExpanded {
-                // ESC 키 힌트
-                Text("esc")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(AppColors.textTertiary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(AppColors.controlBackground.opacity(0.8))
-                    .cornerRadius(3)
-            }
+            Text("esc")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AppColors.textTertiary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 3)
+                .background(AppColors.controlBackground.opacity(0.8))
+                .cornerRadius(4)
         }
-        .padding(.horizontal, 12)
-        .frame(height: isExpanded ? 36 : compactHeight) // 확장 시에도 검색 필드 높이 유지
+        .padding(.horizontal, 16)
+        .frame(height: 48)
     }
 
     // MARK: - Expanded Content
@@ -200,16 +178,14 @@ struct SpotlightOverlay: View {
 
     private var quickActionsView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 섹션 헤더
             Text(L10n.get("spotlight.quickActions"))
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(AppColors.textTertiary)
                 .textCase(.uppercase)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 6)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
 
-            // 빠른 액션 목록
             ScrollView {
                 VStack(spacing: 0) {
                     quickActionRow(icon: "doc.badge.plus", title: L10n.get("explorer.newFile"), shortcut: "⌘N")
@@ -223,25 +199,29 @@ struct SpotlightOverlay: View {
     }
 
     private func quickActionRow(icon: String, title: String, shortcut: String) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 12))
+                .font(.system(size: 14))
                 .foregroundStyle(AppColors.toolbarIcon)
-                .frame(width: 18)
+                .frame(width: 20)
 
             Text(title)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .foregroundStyle(AppColors.textPrimary)
 
             Spacer()
 
             Text(shortcut)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(AppColors.textTertiary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
+        .background(Color.clear)
+        .onHover { hovering in
+            // TODO: 호버 효과 추가
+        }
     }
 
     // MARK: - Search Results View
@@ -249,19 +229,17 @@ struct SpotlightOverlay: View {
     private var searchResultsView: some View {
         VStack(alignment: .leading, spacing: 0) {
             if searchResults.isEmpty {
-                // 검색 결과 없음
-                VStack(spacing: 6) {
+                VStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 20))
+                        .font(.system(size: 24))
                         .foregroundStyle(AppColors.toolbarIcon)
 
                     Text(L10n.get("spotlight.noResults"))
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                         .foregroundStyle(AppColors.textTertiary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                // 검색 결과 목록
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(searchResults) { result in
@@ -274,21 +252,21 @@ struct SpotlightOverlay: View {
     }
 
     private func searchResultRow(_ result: SpotlightSearchResult) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image(systemName: result.iconName)
-                .font(.system(size: 12))
+                .font(.system(size: 14))
                 .foregroundStyle(result.isDirectory ? AppColors.accent : AppColors.toolbarIcon)
-                .frame(width: 18)
+                .frame(width: 20)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(result.name)
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .foregroundStyle(AppColors.textPrimary)
                     .lineLimit(1)
 
                 if let path = result.relativePath {
                     Text(path)
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundStyle(AppColors.textTertiary)
                         .lineLimit(1)
                 }
@@ -296,8 +274,8 @@ struct SpotlightOverlay: View {
 
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
         .onTapGesture {
             selectResult(result)
@@ -306,33 +284,27 @@ struct SpotlightOverlay: View {
 
     // MARK: - Actions
 
-    private func expandSpotlight() {
-        closingTaskId = nil
-        isExpanded = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            guard isExpanded else { return }
-            isTextFieldFocused = true
-        }
-    }
-
     private func closeSpotlight() {
         closingTaskId = nil
-        isTextFieldFocused = false
-        isExpanded = false
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+            showContent = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            isExpanded = false
+        }
     }
 
     private func performSearch() {
         // TODO: 실제 검색 구현
-        // FileSystemManager를 통해 프로젝트 내 파일 검색
     }
 
     private func selectResult(_ result: SpotlightSearchResult) {
-        // TODO: 검색 결과 선택 시 파일 열기
         closeSpotlight()
     }
 }
 
-/// 스포트라이트 검색 결과 모델
+// MARK: - Spotlight Search Result
+
 struct SpotlightSearchResult: Identifiable {
     let id: UUID
     let name: String
@@ -356,39 +328,46 @@ struct SpotlightSearchResult: Identifiable {
 
 // MARK: - Window Drag Exclusion
 
-/// 윈도우 드래그 영역에서 제외하는 NSView 래퍼
-/// 툴바 영역에서 스포트라이트 클릭이 윈도우 이동으로 처리되는 것을 방지
-struct WindowDragExclusionView: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NonDraggableView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = .clear
-        return view
+/// 윈도우 드래그를 차단하는 SwiftUI 래퍼
+struct WindowDragExclusionWrapper<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func makeNSView(context: Context) -> NSHostingView<Content> {
+        let hostingView = NonDraggableHostingView(rootView: content)
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = .clear
+        return hostingView
+    }
 
-    class NonDraggableView: NSView {
+    func updateNSView(_ nsView: NSHostingView<Content>, context: Context) {
+        nsView.rootView = content
+    }
+
+    class NonDraggableHostingView<V: View>: NSHostingView<V> {
         override var mouseDownCanMoveWindow: Bool { false }
-
-        // hitTest를 오버라이드하지 않음 - SwiftUI 제스처 처리에 맡김
     }
 }
 
-#Preview("Compact") {
-    ZStack(alignment: .top) {
-        Color(nsColor: .windowBackgroundColor)
+// MARK: - Previews
 
-        SpotlightOverlay(text: .constant(""), isExpanded: .constant(false))
+#Preview("Toolbar Item") {
+    HStack {
+        Spacer()
+        SpotlightToolbarItem(text: .constant(""), isExpanded: .constant(false))
+        Spacer()
     }
-    .frame(width: 600, height: 200)
+    .frame(width: 600, height: 50)
+    .background(Color(nsColor: .windowBackgroundColor))
 }
 
-#Preview("Expanded") {
-    ZStack(alignment: .top) {
+#Preview("Expanded Overlay") {
+    ZStack {
         Color(nsColor: .windowBackgroundColor)
-
-        SpotlightOverlay(text: .constant(""), isExpanded: .constant(true))
+        SpotlightExpandedOverlay(text: .constant(""), isExpanded: .constant(true))
     }
-    .frame(width: 600, height: 500)
+    .frame(width: 800, height: 600)
 }

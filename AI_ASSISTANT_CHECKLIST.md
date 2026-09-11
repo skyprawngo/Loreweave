@@ -1,142 +1,24 @@
-# AI 어시스턴트 기능 체크리스트
+# AI 어시스턴트 검토 맥락
 
-AI CLI 연결 및 채팅 기능 구현 완료 현황
+2026-09-11 현재 작업 트리를 기준으로 기존 구현 체크리스트를 정리했다. 아래는 소스에 있는 연결점과 검증할 시나리오이며, CLI 설치·인증이나 실제 채팅 성공을 인증하는 완료표가 아니다.
 
-## 구현 완료 항목
+## 현재 구현 경로
 
-### 1. 설정 및 상태 관리
-- [x] `UserSettings`에 AI 어시스턴트 활성화 설정 추가
-  - `aiAssistantEnabled`: Bool - 활성화 여부
-  - `aiAssistantCLIType`: String - 선택된 CLI 타입
-- [x] `AIConnectionState` enum - 연결 상태 관리
-  - `inactive` → `selectingAI` → `checkingCLI` → `cliNotInstalled`/`ready` → `connected`
+- 연결 설정과 전송 상태: `Views/MainEditor/AIAssistant/AIAssistantViewModel.swift`.
+- 카드·입력 화면: `Views/MainEditor/AIAssistant/Chat/AIChatView.swift`. 이전 별도 `ChatInputView.swift`, `ChatMessageView.swift` 목록은 현재 구조와 맞지 않는다.
+- CLI 감지·설치·프로세스: `Services/AI/CLI/`.
+- 문맥과 제공자 옵션: `Services/AI/Prompt/AIPromptTemplateManager.swift`, `Resources/AIPromptTemplates.json`.
+- 대화 저장: `Services/AI/Chat/ChatHistoryManager.swift`의 `ai-sessions/session-metadata.json`, `cards/{UUID}.json`. 구형 단일 기록 파일 읽기도 남아 있다.
 
-### 2. 데이터 모델 (Services/AI/Models/)
-- [x] `AICLIType.swift` - AI CLI 타입 정의
-  - Claude, ChatGPT 지원
-  - CLI 명령어, 설치 경로, 설치 스크립트 정보 포함
-- [x] `AIMessage.swift` - 채팅 메시지 모델
-  - 역할(user/assistant/system), 내용, 타임스탬프, 스트리밍 상태
-- [x] `AIConnectionState.swift` - 연결 상태 enum
-  - 연결 흐름별 상태 정의
+위 경로는 `Loreweave/` 기준이다. 저장·호출 경계는 [AI 서비스 맥락](Loreweave/Services/AI/claude.md)에 있다.
 
-### 3. CLI 서비스 (Services/AI/CLI/)
-- [x] `CLIDetector.swift` - CLI 설치 감지
-  - `which` 명령어로 PATH 검색
-  - 일반적인 설치 경로 직접 확인
-  - npm/Node.js 설치 여부 확인
-- [x] `CLIInstaller.swift` - CLI 설치 지원
-  - npm을 통한 자동 설치 (Claude)
-  - 설치 페이지 열기 (수동 설치)
-  - 설치 진행 상황 스트리밍
-- [x] `CLIProcessManager.swift` - CLI 프로세스 관리
-  - 프롬프트 전송 및 스트리밍 응답 수신
-  - 세션 시작/종료
+## 실제 동작 확인이 필요한 항목
 
-### 4. 채팅 서비스 (Services/AI/Chat/)
-- [x] `ChatHistoryManager.swift` - 채팅 히스토리 관리
-  - 프로젝트별 히스토리 저장 (`.{name}.weavedata/ai-chat-history.json`)
-  - 세션 저장/로드/삭제
-  - 메시지 추가/업데이트
+- 제공자별 실행 파일 감지, 수동 경로 선택, 인증 실패와 설치 실패 안내.
+- 단발/터미널 모드의 첫 응답, 후속 대화, 선택지, 중단과 프로세스 종료.
+- 전송 중 프로젝트·제공자 변경 시 이전 출력과 세션이 새 대화에 섞이지 않는지.
+- 저장된 카드·태그·세션 ID 복원, 구형 기록 읽기와 손상/쓰기 실패 처리.
+- 포함된 원고·선택 줄·태그 카드가 사용자가 의도한 문맥과 일치하는지.
+- 한국어·영어·일본어 UI 및 IME 입력·Undo·Redo.
 
-### 5. UI 컴포넌트 (Views/MainEditor/AIAssistant/)
-
-#### 비활성화 상태 (Inactive/)
-- [x] `AIInactiveView.swift` - 초기 비활성화 상태
-  - "AI 연결하기" 버튼
-
-#### 설정 단계 (Setup/)
-- [x] `AISetupView.swift` - AI 선택 드롭다운
-  - Claude/ChatGPT 선택
-  - 확인/취소 버튼
-- [x] `CLIInstallGuideView.swift` - CLI 설치 안내
-  - 설치 상태별 UI
-  - 자동 설치 / 수동 설치 페이지 열기 / 재확인 버튼
-
-#### 채팅 UI (Chat/)
-- [x] `AIChatView.swift` - 채팅 메인 뷰
-  - 헤더 (AI 이름, 메뉴)
-  - 메시지 목록
-  - 입력 영역
-- [x] `ChatMessageView.swift` - 개별 메시지 뷰
-  - 역할별 아이콘/색상
-  - 스트리밍 상태 표시
-- [x] `ChatInputView.swift` - 입력 영역
-  - 텍스트 입력 필드
-  - 전송/취소 버튼
-
-#### 메인 컨테이너
-- [x] `AIAssistantContainerView.swift` - 상태별 뷰 분기
-  - `AIAssistantViewModel` - 상태 관리 및 비즈니스 로직
-
-### 6. 다국어 지원
-- [x] 한국어 (ko.json)
-- [x] 영어 (en.json)
-- [x] 일본어 (ja.json)
-
-### 7. 문서화
-- [x] `Services/AI/claude.md` - AI 서비스 문서
-
----
-
-## 파일 구조
-
-```
-Services/AI/
-├── claude.md
-├── Models/
-│   ├── AICLIType.swift
-│   ├── AIMessage.swift
-│   └── AIConnectionState.swift
-├── CLI/
-│   ├── CLIDetector.swift
-│   ├── CLIInstaller.swift
-│   └── CLIProcessManager.swift
-└── Chat/
-    └── ChatHistoryManager.swift
-
-Views/MainEditor/AIAssistant/
-├── AIAssistantContainerView.swift
-├── Inactive/
-│   └── AIInactiveView.swift
-├── Setup/
-│   ├── AISetupView.swift
-│   └── CLIInstallGuideView.swift
-└── Chat/
-    ├── AIChatView.swift
-    ├── ChatMessageView.swift
-    └── ChatInputView.swift
-```
-
----
-
-## 디버깅 가이드
-
-### 1. AI 연결 문제
-- `CLIDetector.checkInstallation(for:)` 결과 확인
-- CLI가 설치된 경로가 PATH에 포함되어 있는지 확인
-- 터미널에서 `which claude` 또는 `which chatgpt` 실행하여 경로 확인
-
-### 2. 메시지 전송 문제
-- `CLIProcessManager.sendPrompt` 에러 로그 확인
-- CLI가 올바르게 인증되어 있는지 확인 (Claude의 경우 `claude login`)
-
-### 3. 히스토리 저장 문제
-- 프로젝트 숨김 폴더 존재 여부 확인: `.{프로젝트명}.weavedata/`
-- `ai-chat-history.json` 파일 권한 확인
-
-### 4. UI 상태 문제
-- `AIAssistantViewModel.connectionState` 값 확인
-- `UserSettings.aiAssistantEnabled`, `aiAssistantCLIType` 값 확인
-
----
-
-## 향후 확장 가능 기능
-
-- [ ] 파일 참조 기능 (@file)
-- [ ] 선택된 텍스트 컨텍스트 전달
-- [ ] 코드 블록 렌더링 (마크다운)
-- [ ] 대화 내보내기/가져오기
-- [ ] 다중 세션 지원
-- [ ] 커스텀 시스템 프롬프트
-- [ ] 토큰 사용량 표시
+검증 결과를 추가할 때 사용한 CLI/앱 버전, 실행 시나리오와 실제 결과를 남긴다. 새 기능 제안과 수정 우선순위는 앱 검토보고서에서 토의한다.

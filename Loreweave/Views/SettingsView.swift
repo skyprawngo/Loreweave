@@ -14,6 +14,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case ai
     case editor
     case shortcuts
+    case developer
 
     var id: String { rawValue }
 
@@ -23,6 +24,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .ai: return L10n.get("settings.ai")
         case .editor: return L10n.sidebar.editor
         case .shortcuts: return L10n.get("settings.shortcuts")
+        case .developer: return L10n.get("settings.developer")
         }
     }
 
@@ -32,6 +34,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .ai: return "sparkles"
         case .editor: return "doc.text"
         case .shortcuts: return "keyboard"
+        case .developer: return "hammer"
         }
     }
 }
@@ -57,6 +60,8 @@ struct SettingsView: View {
                 EditorSettingsView()
             case .shortcuts:
                 ShortcutsSettingsView()
+            case .developer:
+                DeveloperSettingsView()
             }
         }
         .navigationSplitViewStyle(.prominentDetail)
@@ -126,7 +131,7 @@ struct GeneralSettingsView: View {
                     }
                 }
                 .alert(L10n.get("settings.theme.changeTitle"), isPresented: $showThemeChangeDialog) {
-                    Button(L10n.common.cancel, role: .cancel) {
+                    Button(L10n.get("settings.theme.later")) {
                         // 테마 설정 저장 (다음 재시작 시 적용)
                         if let theme = pendingTheme {
                             UserSettings.shared.appTheme = theme
@@ -168,6 +173,20 @@ struct GeneralSettingsView: View {
                         .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
+
+                    // 시스템 기본으로 리셋 버튼 (커스텀 폰트 선택 시에만 표시)
+                    if !appFontName.isEmpty {
+                        Button {
+                            appFontName = ""
+                            UserSettings.shared.appFontName = ""
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.get("settings.font.resetToSystem"))
+                    }
                 }
 
                 // 시작 동작 설정
@@ -179,6 +198,21 @@ struct GeneralSettingsView: View {
                 .onChange(of: launchBehavior) { _, newValue in
                     UserSettings.shared.appLaunchBehavior = newValue
                 }
+            }
+
+            // 이용약관
+            Section {
+                Button {
+                    TermsWindowController.shared.openTermsWindow()
+                } label: {
+                    HStack {
+                        Label(L10n.get("terms.title"), systemImage: "doc.text")
+                        Spacer()
+                        Image(systemName: "arrow.up.right.square")
+                            .foregroundStyle(AppColors.toolbarIcon)
+                    }
+                }
+                .buttonStyle(.plain)
             }
 
             // 폴더 접근 권한
@@ -290,31 +324,71 @@ private class AppFontPanelDelegate: NSObject {
 // MARK: - AI Settings
 
 struct AISettingsView: View {
-    @State private var openAIKey: String = ""
-    @State private var claudeKey: String = ""
-    @State private var selectedProvider: String = "claude"
+    @State private var aiAssistantEnabled = UserSettings.shared.aiAssistantEnabled
+    @State private var selectedProvider: AICLIType?
 
     var body: some View {
         Form {
+            // AI 패널 활성화
+            Section {
+                Toggle(L10n.get("settings.developer.aiPanelEnabled"), isOn: $aiAssistantEnabled)
+                    .onChange(of: aiAssistantEnabled) { _, newValue in
+                        UserSettings.shared.aiAssistantEnabled = newValue
+                        // 비활성화 시 저장된 CLI 타입과 경로 모두 삭제하여 다시 선택할 수 있도록 함
+                        if !newValue {
+                            UserSettings.shared.aiAssistantCLIType = ""
+                            UserSettings.shared.clearAICLIPath()
+                            selectedProvider = nil
+                        }
+                    }
+            } footer: {
+                Text(L10n.get("settings.developer.aiPanelDescription"))
+            }
+
             // AI 제공자 설정
             Section {
                 Picker(L10n.get("settings.aiProvider"), selection: $selectedProvider) {
-                    Text("Claude").tag("claude")
-                    Text("OpenAI").tag("openai")
+                    Text(L10n.get("ai.setup.selectPlaceholder")).tag(nil as AICLIType?)
+                    ForEach(AICLIType.allCases) { cliType in
+                        Text(cliType.displayName).tag(cliType as AICLIType?)
+                    }
+                }
+                .onChange(of: selectedProvider) { _, newValue in
+                    if let provider = newValue {
+                        UserSettings.shared.aiAssistantCLIType = provider.rawValue
+                    } else {
+                        UserSettings.shared.aiAssistantCLIType = ""
+                    }
                 }
             }
 
-            // API 키 설정
             Section {
-                SecureField("Claude API Key", text: $claudeKey)
-                    .textFieldStyle(.roundedBorder)
-                SecureField("OpenAI API Key", text: $openAIKey)
-                    .textFieldStyle(.roundedBorder)
-            } header: {
-                Text("API Keys")
+                Text(L10n.get("settings.ai.cliAuthentication"))
+                    .foregroundStyle(AppColors.textSecondary)
             }
+
         }
         .formStyle(.grouped)
+        .onAppear {
+            // 저장된 AI 제공자 로드
+            if let savedType = AICLIType(rawValue: UserSettings.shared.aiAssistantCLIType) {
+                selectedProvider = savedType
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            // 외부에서 설정이 변경되었을 때 UI 동기화
+            let newEnabled = UserSettings.shared.aiAssistantEnabled
+            if aiAssistantEnabled != newEnabled {
+                aiAssistantEnabled = newEnabled
+            }
+            if let savedType = AICLIType(rawValue: UserSettings.shared.aiAssistantCLIType) {
+                if selectedProvider != savedType {
+                    selectedProvider = savedType
+                }
+            } else if selectedProvider != nil && UserSettings.shared.aiAssistantCLIType.isEmpty {
+                selectedProvider = nil
+            }
+        }
     }
 }
 
@@ -324,6 +398,7 @@ struct EditorSettingsView: View {
     @State private var fontSize: Double = Double(UserSettings.shared.editorFontSize)
     @State private var lineSpacing: Double = Double(UserSettings.shared.editorLineSpacing)
     @State private var autoSaveOption: AutoSaveOption = UserSettings.shared.autoSaveOption
+    @State private var rememberCursorPosition: Bool = UserSettings.shared.rememberCursorPosition
 
     var body: some View {
         Form {
@@ -361,6 +436,11 @@ struct EditorSettingsView: View {
                 .onChange(of: autoSaveOption) { _, newValue in
                     UserSettings.shared.autoSaveOption = newValue
                 }
+
+                Toggle(L10n.get("settings.rememberCursorPosition"), isOn: $rememberCursorPosition)
+                    .onChange(of: rememberCursorPosition) { _, newValue in
+                        UserSettings.shared.rememberCursorPosition = newValue
+                    }
             }
         }
         .formStyle(.grouped)
@@ -391,7 +471,9 @@ struct ShortcutsSettingsView: View {
 
     /// 필터링된 바인딩 목록
     private var filteredBindings: [ShortcutBinding] {
-        var bindings = shortcutManager.bindings
+        // Standard text editing follows the macOS responder chain, not custom bindings.
+        let systemActions: Set<ShortcutAction> = [.undo, .redo, .cut, .copy, .paste, .selectAll]
+        var bindings = shortcutManager.bindings.filter { !systemActions.contains($0.action) }
 
         // 카테고리 필터
         if let category = selectedCategory {
@@ -728,6 +810,27 @@ struct ShortcutEditSheet: View {
             modifiers: currentModifiers,
             excluding: binding.action
         )
+    }
+}
+
+// MARK: - Developer Settings
+
+struct DeveloperSettingsView: View {
+    @State private var aiTerminalMode = UserSettings.shared.aiTerminalMode
+
+    var body: some View {
+        Form {
+            Section {
+                Text(L10n.get("settings.ai.structuredMode"))
+                if aiTerminalMode {
+                    Button(L10n.get("settings.ai.disableTerminal")) {
+                        UserSettings.shared.aiTerminalMode = false
+                        aiTerminalMode = false
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

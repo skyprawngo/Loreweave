@@ -129,24 +129,8 @@ final class ProjectManager {
 
     /// 최근 프로젝트 목록에서 존재하지 않는 프로젝트 제거
     private func validateRecentProjects() {
-        var removedPaths: [String] = []
-
-        recentProjects.removeAll { project in
-            guard let path = project.path else { return true }
-
-            // 프로젝트 폴더가 실제로 존재하는지 확인
-            let exists = FileManager.default.fileExists(atPath: path.path)
-            if !exists {
-                removedPaths.append(path.path)
-            }
-            return !exists
-        }
-
-        // 제거된 프로젝트가 있으면 저장 및 북마크 정리
-        if !removedPaths.isEmpty {
-            saveRecentProjects()
-            removeBookmarks(for: removedPaths)
-        }
+        // Offline volumes and temporary permission failures must not erase bookmarks.
+        recentProjects.removeAll { $0.path == nil }
     }
 
     /// 존재하지 않는 프로젝트의 북마크 데이터 제거
@@ -170,6 +154,8 @@ final class ProjectManager {
     ///   - directoryURL: 저장할 디렉토리
     /// - Returns: 생성된 프로젝트
     func createProject(name: String, at directoryURL: URL) -> Project? {
+        do { try DocumentFileStore.validateName(name) }
+        catch { presentError(error); return nil }
         // 이름에 .이 포함되어 있으면 커스텀 확장자로 간주
         let hasCustomExtension = name.contains(".")
         let folderName = hasCustomExtension ? name : "\(name).\(Self.projectExtension)"
@@ -185,7 +171,12 @@ final class ProjectManager {
 
         do {
             // 프로젝트 폴더 생성
-            try FileManager.default.createDirectory(at: projectFolderURL, withIntermediateDirectories: true)
+            guard !FileManager.default.fileExists(atPath: projectFolderURL.path) else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            guard EditorTabManager.shared.prepareToClose(EditorTabManager.shared.tabs) else { return nil }
+            if let old = currentProject?.path { EditorTabManager.shared.saveSession(to: old, omittingApprovedDiscards: true) }
+            try FileManager.default.createDirectory(at: projectFolderURL, withIntermediateDirectories: false)
 
             // 숨김 데이터 폴더 생성 (.abc.weavedata)
             try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
@@ -204,104 +195,64 @@ final class ProjectManager {
             saveBookmark(for: projectFolderURL)
 
             addToRecentProjects(project)
+            if let old = currentProject?.path { stopAccessing(old) }
             currentProject = project
+            UserSettings.shared.setLastOpenedProject(projectFolderURL)
+            EditorTabManager.shared.restoreSession(from: projectFolderURL)
             return project
         } catch {
-            print("Failed to create project: \(error)")
+            presentError(error)
             return nil
         }
     }
 
     /// .weaveproj 폴더에서 프로젝트 열기
     func openProjectFromFile(at url: URL) -> Project? {
-        // 기존 프로젝트가 있으면 세션 저장
-        if let currentPath = currentProject?.path {
-            EditorTabManager.shared.saveSession(to: currentPath)
-        }
-
-        let metadata = metadataURL(for: url)
-
+        if currentProject?.path == url { return currentProject }
+        let access = restoreAccess(to: url)
         do {
-            let data = try Data(contentsOf: metadata)
-            var project = try JSONDecoder().decode(Project.self, from: data)
+            let metadata = metadataURL(for: url)
+            var project = try JSONDecoder().decode(Project.self, from: Data(contentsOf: metadata))
             project.path = url
             project.lastOpenedAt = Date()
-
-            // 메타데이터 업데이트 (lastOpenedAt)
-            let updatedData = try JSONEncoder().encode(project)
-            try updatedData.write(to: metadata)
-
-            // Security-Scoped Bookmark 저장 (앱 재시작 후에도 접근 가능하도록)
+            // Validate the destination before asking to leave the old workspace.
+            guard EditorTabManager.shared.prepareToClose(EditorTabManager.shared.tabs) else {
+                if access { stopAccessing(url) }
+                return nil
+            }
+            if let old = currentProject?.path {
+                EditorTabManager.shared.saveSession(to: old, omittingApprovedDiscards: true)
+                stopAccessing(old)
+            }
+            // Read-only projects remain readable; last-opened bookkeeping is best effort.
+            try? JSONEncoder().encode(project).write(to: metadata, options: .atomic)
             saveBookmark(for: url)
-
             addToRecentProjects(project)
             currentProject = project
-
-            // 마지막으로 열린 프로젝트 저장
             UserSettings.shared.setLastOpenedProject(url)
-
-            // 에디터 세션 복원
             EditorTabManager.shared.restoreSession(from: url)
-
             return project
         } catch {
-            print("Failed to open project: \(error)")
+            if access { stopAccessing(url) }
+            presentError(error)
             return nil
         }
     }
 
-    func openProject(_ project: Project) {
-        // 기존 프로젝트가 있으면 세션 저장 후 닫기
-        if let currentPath = currentProject?.path {
-            EditorTabManager.shared.saveSession(to: currentPath)
-        }
-
-        var updatedProject = project
-        updatedProject.lastOpenedAt = Date()
-
-        // 메타데이터 파일 업데이트
-        if let projectPath = project.path {
-            // Security-Scoped Bookmark으로 접근 권한 복원 시도
-            let hasAccess = restoreAccess(to: projectPath)
-
-            let metadata = metadataURL(for: projectPath)
-            do {
-                let data = try JSONEncoder().encode(updatedProject)
-                try data.write(to: metadata)
-            } catch {
-                print("Failed to update project file: \(error)")
-            }
-
-            // 접근 권한 복원에 성공했으면 종료하지 않음 (프로젝트 작업 중 필요)
-            // 앱 종료 시 또는 프로젝트 닫기 시 stopAccessing 호출
-            _ = hasAccess
-        }
-
-        // 기존 프로젝트 업데이트
-        if let index = recentProjects.firstIndex(where: { $0.id == project.id }) {
-            recentProjects.remove(at: index)
-        }
-        addToRecentProjects(updatedProject)
-        currentProject = updatedProject
-
-        // 마지막으로 열린 프로젝트 저장
-        if let projectPath = project.path {
-            UserSettings.shared.setLastOpenedProject(projectPath)
-
-            // 에디터 세션 복원
-            EditorTabManager.shared.restoreSession(from: projectPath)
-        }
+    @discardableResult
+    func openProject(_ project: Project) -> Bool {
+        guard let url = project.path else { return false }
+        return openProjectFromFile(at: url) != nil
     }
 
     func closeProject() {
-        // 세션 저장
-        if let projectPath = currentProject?.path {
-            EditorTabManager.shared.saveSession(to: projectPath)
-            stopAccessing(projectPath)
+        let tabs = EditorTabManager.shared
+        guard tabs.prepareToClose(tabs.tabs) else { return }
+        if let path = currentProject?.path {
+            tabs.saveSession(to: path, omittingApprovedDiscards: true)
+            stopAccessing(path)
         }
-
-        // 탭 모두 닫기
-        EditorTabManager.shared.closeAllTabs()
+        tabs.closeAllTabs(force: true)
         currentProject = nil
     }
 
@@ -309,9 +260,14 @@ final class ProjectManager {
         recentProjects.removeAll { $0.id == project.id }
         saveRecentProjects()
 
-        if currentProject?.id == project.id {
-            currentProject = nil
-        }
+        // Removing a recent item does not close its open workspace.
+    }
+
+    private func presentError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = L10n.get("storage.operationFailed")
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
     }
 
     private func addToRecentProjects(_ project: Project) {

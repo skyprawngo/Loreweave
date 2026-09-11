@@ -31,6 +31,14 @@ final class GutterView: NSView {
     /// 배경 색상
     var backgroundColor: NSColor = .clear
 
+    /// 외부에서 변경된 줄 표시 색상 (AI 수정 등)
+    var modifiedLineColor: NSColor = .systemOrange
+
+    /// 외부에서 변경된 줄 번호들 (1-indexed)
+    var externallyModifiedLines: Set<Int> = [] {
+        didSet { needsDisplay = true }
+    }
+
     /// 기본 줄 높이
     var lineHeight: CGFloat = 20 {
         didSet {
@@ -201,6 +209,18 @@ final class GutterView: NSView {
         let lineNumber = lineIndex + 1
         let lineNumberString = "\(lineNumber)"
         let isCurrentLine = lineNumber == currentLine
+        let isModified = externallyModifiedLines.contains(lineNumber)
+
+        // 외부 변경 표시 (줄번호 오른쪽에 주황색 바)
+        if isModified {
+            let barWidth: CGFloat = 3
+            let barX = gutterWidth - barWidth - 1  // 구분선 바로 왼쪽
+            let rowHeight = rowHeightProvider?(lineIndex) ?? lineHeight
+            let barRect = CGRect(x: barX, y: y, width: barWidth, height: rowHeight)
+
+            context.setFillColor(modifiedLineColor.cgColor)
+            context.fill(barRect)
+        }
 
         let color = isCurrentLine ? currentLineTextColor : textColor
 
@@ -212,8 +232,8 @@ final class GutterView: NSView {
         let attrString = NSAttributedString(string: lineNumberString, attributes: attributes)
         let textSize = attrString.size()
 
-        // X 위치: 오른쪽 정렬
-        let x = gutterWidth - textSize.width - horizontalPadding
+        // X 위치: 오른쪽 정렬 (변경 표시 바 공간 확보)
+        let x = gutterWidth - textSize.width - horizontalPadding - (isModified ? 4 : 0)
 
         // Core Text로 렌더링
         context.saveGState()

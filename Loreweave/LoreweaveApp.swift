@@ -38,7 +38,7 @@ struct LoreweaveApp: App {
         .defaultPosition(.center)
 
         // 메인 에디터 윈도우
-        WindowGroup(id: "editor") {
+        Window(L10n.app.name, id: "editor") {
             DelayedContentView {
                 MainEditorView(projectManager: projectManager)
                     .environmentObject(appCommands)
@@ -141,9 +141,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// 마지막 프로젝트 자동 열기 모드 여부
     private var isAutoOpenMode = false
 
-    /// 종료 대기 중인 수정된 탭 목록
-    private var pendingModifiedTabs: [EditorTab] = []
-
     /// 앱 시작 직전 - 윈도우 표시 전에 호출됨
     func applicationWillFinishLaunching(_ notification: Notification) {
         let userSettings = UserSettings.shared
@@ -186,7 +183,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationWillTerminate(_ notification: Notification) {
         // 현재 열린 프로젝트가 있으면 세션 저장
         if let projectPath = ProjectManager.shared.currentProject?.path {
-            EditorTabManager.shared.saveSession(to: projectPath)
+            EditorTabManager.shared.saveSession(to: projectPath, omittingApprovedDiscards: true)
         }
     }
 
@@ -199,100 +196,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// 앱 종료 요청 시 호출 - 저장되지 않은 변경사항 확인
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let tabManager = EditorTabManager.shared
-
-        // 수정된 탭 목록 필터링
-        let modifiedTabs = tabManager.tabs.filter { $0.isModified }
-
-        // 수정된 탭이 없으면 바로 종료
-        guard !modifiedTabs.isEmpty else {
-            return .terminateNow
-        }
-
-        // 수정된 탭 목록 저장 후 순차적으로 다이얼로그 표시
-        pendingModifiedTabs = modifiedTabs
-        showNextSaveDialog()
-
-        return .terminateLater
+        let manager = EditorTabManager.shared
+        guard manager.prepareToClose(manager.tabs) else { return .terminateCancel }
+        if let path = ProjectManager.shared.currentProject?.path { manager.saveSession(to: path, omittingApprovedDiscards: true) }
+        return .terminateNow
     }
 
-    /// 다음 저장 다이얼로그 표시
-    private func showNextSaveDialog() {
-        // 대기 중인 탭이 없으면 종료 진행
-        guard let tab = pendingModifiedTabs.first else {
-            NSApp.reply(toApplicationShouldTerminate: true)
-            return
-        }
 
-        // 에디터 윈도우 찾기
-        guard let window = NSApp.windows.first(where: {
-            $0.identifier?.rawValue.contains("editor") == true
-        }) else {
-            // 윈도우가 없으면 그냥 종료
-            NSApp.reply(toApplicationShouldTerminate: true)
-            return
-        }
-
-        let alert = NSAlert()
-        alert.messageText = L10n.get("app.quit.saveChangesTitle")
-        alert.informativeText = String(format: L10n.get("app.quit.saveChangesMessage"), tab.title)
-        alert.alertStyle = .warning
-
-        // 버튼 순서: 저장 (기본) / 저장 안 함 / 취소
-        alert.addButton(withTitle: L10n.get("app.quit.save"))
-        alert.addButton(withTitle: L10n.get("app.quit.dontSave"))
-        alert.addButton(withTitle: L10n.get("common.cancel"))
-
-        alert.beginSheetModalWithArrowNavigation(for: window) { [weak self] response in
-            guard let self = self else { return }
-
-            switch response {
-            case .alertFirstButtonReturn:
-                // 저장 버튼 클릭
-                self.saveTabAndContinue(tab)
-
-            case .alertSecondButtonReturn:
-                // 저장 안 함 버튼 클릭 - 다음 탭으로 진행
-                self.pendingModifiedTabs.removeFirst()
-                self.proceedToNextDialog()
-
-            default:
-                // 취소 버튼 클릭 - 종료 취소
-                self.pendingModifiedTabs.removeAll()
-                NSApp.reply(toApplicationShouldTerminate: false)
-            }
-        }
-    }
-
-    /// 시트가 닫힌 후 다음 다이얼로그 표시 (딜레이 적용)
-    private func proceedToNextDialog() {
-        // 시트가 완전히 닫힌 후 다음 다이얼로그 표시
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.showNextSaveDialog()
-        }
-    }
-
-    /// 탭 저장 후 다음 다이얼로그로 진행
-    private func saveTabAndContinue(_ tab: EditorTab) {
-        let tabManager = EditorTabManager.shared
-
-        // 탭 인덱스 찾기
-        guard let tabIndex = tabManager.tabs.firstIndex(where: { $0.id == tab.id }) else {
-            // 탭을 찾을 수 없으면 다음으로 진행
-            pendingModifiedTabs.removeFirst()
-            proceedToNextDialog()
-            return
-        }
-
-        // 캐시된 내용 가져오기
-        if let content = tabManager.getCachedContent(for: tab.url) {
-            _ = tabManager.saveTab(at: tabIndex, content: content)
-        }
-
-        // 다음 탭으로 진행
-        pendingModifiedTabs.removeFirst()
-        proceedToNextDialog()
-    }
 }
 
 // MARK: - Notification Names

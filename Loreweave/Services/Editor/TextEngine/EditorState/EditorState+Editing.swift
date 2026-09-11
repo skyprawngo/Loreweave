@@ -13,6 +13,7 @@ extension EditorState {
     /// 현재 커서 위치에 텍스트 삽입
     func insertText(_ text: String) {
         guard isEditable else { return }
+        selection.clampToDocument(document)
 
         #if DEBUG
         print("[EditorState] insertText: '\(text.debugDescription)' at line:\(selection.cursor.line) col:\(selection.cursor.column)")
@@ -21,12 +22,15 @@ extension EditorState {
 
         // 선택 영역이 있으면 먼저 삭제 (Undo 기록 포함)
         if selection.hasSelection {
-            deleteSelection()
+            replaceSelection(with: text)
+            return
         }
 
         let cursor = selection.cursor
         let startLine = cursor.line
         let startColumn = cursor.column
+        let oldLine = document.getLine(cursor.line) ?? ""
+        let insertionUTF16 = oldLine.utf16Offset(atCharacter: cursor.column)
 
         document.insert(text, atLine: cursor.line, column: cursor.column)
 
@@ -41,14 +45,23 @@ extension EditorState {
 
         if insertedLines.count == 1 {
             newLine = cursor.line
-            newColumn = cursor.column + text.count
+            newColumn = (document.getLine(cursor.line) ?? "").characterOffset(atUTF16: insertionUTF16 + text.utf16.count)
         } else {
             newLine = cursor.line + insertedLines.count - 1
             newColumn = insertedLines.last?.count ?? 0
         }
 
         // Undo 기록 (그룹화)
-        addToTextGroup(text: text, atLine: startLine, column: startColumn, newEndLine: newLine, newEndColumn: newColumn)
+        let updatedLine = document.getLine(startLine) ?? ""
+        if insertedLines.count == 1 && updatedLine.count != oldLine.count + text.count {
+            // A combining scalar/ZWJ can merge adjacent graphemes. Preserve the entire line
+            // because the inserted scalars cannot be undone with grapheme-column deletion.
+            pushUndoAction(.replaceText(startLine: startLine, startColumn: 0,
+                                       endLine: startLine, endColumn: oldLine.count,
+                                       oldText: oldLine, newText: updatedLine))
+        } else {
+            addToTextGroup(text: text, atLine: startLine, column: startColumn, newEndLine: newLine, newEndColumn: newColumn)
+        }
 
         #if DEBUG
         print("[EditorState] cursor move: (\(cursor.line),\(cursor.column)) -> (\(newLine),\(newColumn))")
@@ -89,6 +102,7 @@ extension EditorState {
     /// 백스페이스 (커서 앞 문자 삭제)
     func deleteBackward() {
         guard isEditable else { return }
+        selection.clampToDocument(document)
 
         #if DEBUG
         print("[EditorState] deleteBackward at line:\(selection.cursor.line) col:\(selection.cursor.column)")
@@ -152,6 +166,7 @@ extension EditorState {
     /// Delete 키 (커서 뒤 문자 삭제)
     func deleteForward() {
         guard isEditable else { return }
+        selection.clampToDocument(document)
 
         if selection.hasSelection {
             deleteSelection()
@@ -198,6 +213,7 @@ extension EditorState {
     /// Option+백스페이스 (단어 단위 삭제)
     func deleteWordBackward() {
         guard isEditable else { return }
+        selection.clampToDocument(document)
 
         if selection.hasSelection {
             deleteSelection()
@@ -258,6 +274,7 @@ extension EditorState {
     /// Cmd+백스페이스 (행 시작까지 삭제)
     func deleteToLineStart() {
         guard isEditable else { return }
+        selection.clampToDocument(document)
 
         if selection.hasSelection {
             deleteSelection()

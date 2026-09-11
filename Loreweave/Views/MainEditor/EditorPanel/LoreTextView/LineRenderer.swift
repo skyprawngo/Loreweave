@@ -237,6 +237,26 @@ final class LineRenderer {
         context.restoreGState()
     }
 
+    func renderComposition(before: String, marked: String, after: String,
+                           at origin: CGPoint, in context: CGContext, viewportWidth: CGFloat) {
+        let attributed = NSMutableAttributedString(attributedString: createAttributedString(before + marked + after))
+        attributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue,
+                                range: NSRange(location: before.utf16.count, length: marked.utf16.count))
+        let typesetter = CTTypesetterCreateWithAttributedString(attributed)
+        var offset = 0
+        var row = 0
+        while offset < attributed.length {
+            let length = wordWrapEnabled && viewportWidth > 0
+                ? CTTypesetterSuggestLineBreak(typesetter, offset, Double(viewportWidth))
+                : attributed.length
+            guard length > 0 else { break }
+            let line = CTTypesetterCreateLine(typesetter, CFRange(location: offset, length: length))
+            drawLine(line, at: CGPoint(x: origin.x, y: origin.y + CGFloat(row) * lineHeight), in: context)
+            offset += length
+            row += 1
+        }
+    }
+
     /// CTLine 그리기
     private func drawLine(_ ctLine: CTLine, at origin: CGPoint, in context: CGContext) {
         context.saveGState()
@@ -266,7 +286,6 @@ final class LineRenderer {
 
         let content = line.content
         let lineLength = content.count
-        let rowHeight = wordWrapEnabled ? calculateHeight(for: line, viewportWidth: viewportWidth) : lineHeight
 
         // 이 행에서 선택된 범위 계산
         let startCol: Int
@@ -288,26 +307,31 @@ final class LineRenderer {
 
         guard startCol < endCol || (lineIndex != normalized.end.line && startCol == endCol) else { return }
 
-        // 선택 영역 x 좌표 계산
-        let startX = measureWidth(of: String(content.prefix(startCol)))
-        let endX: CGFloat
-
-        if endCol >= lineLength && lineIndex < normalized.end.line {
-            endX = max(measureWidth(of: content), viewportWidth)
-        } else {
-            endX = measureWidth(of: String(content.prefix(endCol)))
-        }
-
-        // 선택 영역 그리기
-        let selectionRect = CGRect(
-            x: origin.x + startX,
-            y: origin.y,
-            width: max(0, endX - startX),
-            height: rowHeight
-        )
-
-        context.setFillColor(NSColor.selectedTextBackgroundColor.cgColor)
-        context.fill(selectionRect)
+        let startOffset = content.utf16Offset(atCharacter: startCol)
+        let endOffset = content.utf16Offset(atCharacter: endCol)
+        let typesetter = CTTypesetterCreateWithAttributedString(createAttributedString(content))
+        var offset = 0
+        var visualRow = 0
+        repeat {
+            let length = wordWrapEnabled && viewportWidth > 0
+                ? CTTypesetterSuggestLineBreak(typesetter, offset, Double(viewportWidth))
+                : content.utf16.count
+            let end = offset + length
+            let selectedStart = max(offset, startOffset)
+            let selectedEnd = min(end, endOffset)
+            if selectedStart < selectedEnd || (lineIndex < normalized.end.line && end == content.utf16.count) {
+                let ctLine = CTTypesetterCreateLine(typesetter, CFRange(location: offset, length: length))
+                let x1 = CTLineGetOffsetForStringIndex(ctLine, selectedStart, nil)
+                let x2 = lineIndex < normalized.end.line && end == content.utf16.count
+                    ? viewportWidth : CTLineGetOffsetForStringIndex(ctLine, selectedEnd, nil)
+                context.setFillColor(NSColor.selectedTextBackgroundColor.cgColor)
+                context.fill(CGRect(x: origin.x + x1, y: origin.y + CGFloat(visualRow) * lineHeight,
+                                    width: max(0, x2 - x1), height: lineHeight))
+            }
+            if length == 0 { break }
+            offset = end
+            visualRow += 1
+        } while offset < content.utf16.count
     }
 
     /// 현재 줄 하이라이트 렌더링
@@ -338,94 +362,30 @@ final class LineRenderer {
         rowHeight: CGFloat? = nil,
         viewportWidth: CGFloat? = nil
     ) {
-        let content = line.content
+        let rect = caretRect(in: line.content, column: column, viewportWidth: viewportWidth ?? 0)
+        context.setFillColor(AppColors.nsEditorCursor.cgColor)
+        context.fill(rect.offsetBy(dx: origin.x, dy: origin.y))
+    }
 
-        // Word Wrap 활성화 시, 커서가 위치한 래핑된 줄을 찾아야 함
-        if wordWrapEnabled, let vw = viewportWidth, vw > 0, !content.isEmpty {
-            let attributedString = createAttributedString(content)
-            let typesetter = CTTypesetterCreateWithAttributedString(attributedString)
-            let stringLength = attributedString.length
-
-            // CTTypesetter로 각 래핑된 줄의 범위 계산
-            let cursorColumn = min(column, content.count)
-            var wrappedLineIndex = 0
-            var cursorXInLine: CGFloat = 0
-            var found = false
-
-            // 모든 래핑된 줄의 범위를 먼저 계산
-            var lineRanges: [(start: Int, end: Int)] = []
-            var tempStart = 0
-            while tempStart < stringLength {
-                let lineLength = CTTypesetterSuggestLineBreak(typesetter, tempStart, Double(vw))
-                guard lineLength > 0 else { break }
-                lineRanges.append((start: tempStart, end: tempStart + lineLength))
-                tempStart += lineLength
+    func caretRect(in content: String, column: Int, viewportWidth: CGFloat) -> CGRect {
+        let utf16Column = content.utf16Offset(atCharacter: column)
+        let typesetter = CTTypesetterCreateWithAttributedString(createAttributedString(content))
+        var offset = 0
+        var row = 0
+        repeat {
+            let length = wordWrapEnabled && viewportWidth > 0
+                ? CTTypesetterSuggestLineBreak(typesetter, offset, Double(viewportWidth))
+                : content.utf16.count
+            let end = offset + length
+            if utf16Column < end || end >= content.utf16.count || length == 0 {
+                let line = CTTypesetterCreateLine(typesetter, CFRange(location: offset, length: length))
+                let x = CTLineGetOffsetForStringIndex(line, utf16Column, nil)
+                return CGRect(x: x, y: CGFloat(row) * lineHeight + 2, width: 2, height: max(1, lineHeight - 4))
             }
-
-            // 커서가 위치한 래핑된 줄 찾기
-            for (index, range) in lineRanges.enumerated() {
-                let isLastLine = (index == lineRanges.count - 1)
-
-                // 마지막 줄이면 끝 위치 포함, 아니면 끝 위치 제외
-                // (줄 끝에서 Enter나 타이핑 시 다음 래핑된 줄의 시작으로 이동)
-                let inRange: Bool
-                if isLastLine {
-                    inRange = cursorColumn >= range.start && cursorColumn <= range.end
-                } else {
-                    inRange = cursorColumn >= range.start && cursorColumn < range.end
-                }
-
-                if inRange {
-                    wrappedLineIndex = index
-                    // 해당 줄 내에서 커서 X 위치 계산
-                    let offsetInLine = cursorColumn - range.start
-                    let lineText = String(content.dropFirst(range.start).prefix(offsetInLine))
-                    cursorXInLine = measureWidth(of: lineText)
-                    found = true
-                    break
-                }
-            }
-
-            // 커서 위치를 찾지 못한 경우 (문자열 끝) - 마지막 줄의 끝에 배치
-            if !found {
-                if let lastRange = lineRanges.last {
-                    wrappedLineIndex = lineRanges.count - 1
-                    let offsetInLine = cursorColumn - lastRange.start
-                    let lineText = String(content.dropFirst(lastRange.start).prefix(max(0, offsetInLine)))
-                    cursorXInLine = measureWidth(of: lineText)
-                } else {
-                    // 줄이 없으면 원점에 커서 표시
-                    cursorXInLine = 0
-                }
-            }
-
-            // 커서 Y 위치: 래핑된 줄 인덱스에 따라 오프셋
-            let cursorY = origin.y + CGFloat(wrappedLineIndex) * lineHeight
-
-            let cursorRect = CGRect(
-                x: origin.x + cursorXInLine,
-                y: cursorY + 2,
-                width: 2,
-                height: lineHeight - 4
-            )
-
-            context.setFillColor(AppColors.nsEditorCursor.cgColor)
-            context.fill(cursorRect)
-        } else {
-            // Word Wrap 비활성화 또는 빈 줄: 기존 로직
-            let cursorX = measureWidth(of: String(content.prefix(min(column, content.count))))
-            let height = rowHeight ?? lineHeight
-
-            let cursorRect = CGRect(
-                x: origin.x + cursorX,
-                y: origin.y + 2,
-                width: 2,
-                height: height - 4
-            )
-
-            context.setFillColor(AppColors.nsEditorCursor.cgColor)
-            context.fill(cursorRect)
-        }
+            offset = end
+            row += 1
+        } while offset <= content.utf16.count
+        return CGRect(x: 0, y: 2, width: 2, height: max(1, lineHeight - 4))
     }
 
     // MARK: - Measurement
@@ -448,7 +408,26 @@ final class LineRenderer {
         let ctLine = CTLineCreateWithAttributedString(attributedString)
 
         let index = CTLineGetStringIndexForPosition(ctLine, CGPoint(x: xPosition, y: 0))
-        return max(0, min(index, text.count))
+        return text.characterOffset(atUTF16: index)
+    }
+
+    func characterIndex(at x: CGFloat, in text: String, visualRow: Int, viewportWidth: CGFloat) -> Int {
+        guard !text.isEmpty, viewportWidth > 0 else { return characterIndex(at: x, in: text) }
+        let typesetter = CTTypesetterCreateWithAttributedString(createAttributedString(text))
+        var offset = 0
+        var row = 0
+        while offset < text.utf16.count {
+            let length = CTTypesetterSuggestLineBreak(typesetter, offset, Double(viewportWidth))
+            guard length > 0 else { break }
+            if row >= max(0, visualRow) || offset + length >= text.utf16.count {
+                let line = CTTypesetterCreateLine(typesetter, CFRange(location: offset, length: length))
+                let hit = CTLineGetStringIndexForPosition(line, CGPoint(x: max(0, x), y: 0))
+                return text.characterOffset(atUTF16: hit == kCFNotFound ? offset + length : hit)
+            }
+            offset += length
+            row += 1
+        }
+        return text.count
     }
 
     // MARK: - Helpers

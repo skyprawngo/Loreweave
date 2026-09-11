@@ -1,28 +1,11 @@
-# FileSystem Services
+# 파일 트리와 원고 쓰기
 
-## 파일 목록
+`FileSystemManager.swift`는 `Models/FileSystemItem.swift`의 트리를 갱신하고 파일 작업·변경 감시를 수행한다. 화면은 `Views/MainEditor/Sidebar/ProjectExplorerView.swift`와 그 하위 뷰다.
 
-| 파일 | 역할 |
-|------|------|
-| `FileSystemManager.swift` | 파일/폴더 CRUD 및 변경 감시 |
+초기화는 루트의 직접 자식을 로드하고, 폴더는 펼칠 때 자식을 갱신한다. 초기 전체 하위 개수 재귀 로드는 제거했다. 기존 항목 객체와 펼침 상태를 재사용하며 로드한 디렉터리에 watcher를 붙인다. 감시 결과는 해당 프로젝트에만 적용하고 전환 시 watcher를 정리한다. 이 감시가 미열람 하위 전체나 열린 원고의 본문 충돌 검사를 대신하지는 않는다.
 
-## FileSystemManager
+`DocumentFileStore.swift`는 UTF-8 원고의 배타적 생성, 저장 직전 기준본 비교, atomic 쓰기를 담당한다. 충돌·읽기 실패를 조용한 덮어쓰기로 바꾸지 않는다. `NSFileCoordinator`를 사용하지만 이에 협조하지 않는 외부 writer와의 비교/쓰기 경쟁까지 완전히 차단하는 계약은 아니다.
 
-프로젝트 탐색기의 파일/폴더 작업을 담당합니다.
+이동·이름 변경은 편집기를 flush한 뒤 디스크 작업에 성공하면 열린 탭과 캐시 URL을 함께 갱신한다. 삭제는 dirty 결정을 먼저 받고 휴지통 이동 성공 후 탭을 닫는다. 작업 실패나 취소에서 미저장 초안을 유지해야 한다.
 
-### 주요 기능
-- **디렉토리 로드**: `loadChildren(of:)` - 동기적으로 하위 항목 로드
-- **펼침/접기**: `toggleExpand(_:)` - 폴더 확장 상태 토글
-- **CRUD**: createFolder, createFile, rename, delete, move, copy
-- **파일 감시**: `startWatching(at:)` - DispatchSource로 변경 감지
-- **드래그 앤 드롭**: `move(_:to:)` - 항목 이동
-
-### 설계 원칙
-- **동기적 실행**: 파일 I/O는 메인 스레드에서 동기적으로 실행
-- **객체 재사용**: 기존 `FileSystemItem` 객체를 재사용하여 SwiftUI 상태 안정성 유지
-- **Lazy Loading**: 폴더 클릭 시 해당 폴더의 직접 자식만 로드
-
-### 새 파일 생성 디렉토리 우선순위
-1. 선택된 파일의 부모 디렉토리
-2. 선택된 폴더
-3. 프로젝트 루트 디렉토리
+새 파일 위치는 선택 파일의 부모, 선택 폴더, 프로젝트 루트 순으로 결정된다.

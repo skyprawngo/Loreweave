@@ -6,96 +6,115 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct CLIInstallGuideView: View {
     let cliType: AICLIType
     let installStatus: CLIInstallationStatus
-    let onInstall: () -> Void
     let onOpenInstallPage: () -> Void
     let onRetryCheck: () -> Void
+    let onSelectCLIPath: (URL) -> Void
     let onCancel: () -> Void
 
-    @State private var installProgress: String = ""
-    @State private var isInstalling = false
+    @State private var showingFilePicker = false
+    @State private var showCopiedFeedback = false
+
+    /// CLI 기본 설치 경로
+    private var defaultCLIPath: String {
+        cliType.possiblePaths.first ?? "~/.local/bin/\(cliType.commandName)"
+    }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
+        VStack(spacing: 0) {
+            // 헤더
+            HStack {
+                Image(cliType.iconImageName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 16, height: 16)
+                    .foregroundStyle(AppColors.accent)
+                Text(cliType.displayName)
+                    .font(.headline)
 
-            // 아이콘
-            Image(systemName: statusIcon)
-                .font(.system(size: 40))
-                .foregroundStyle(statusColor)
-
-            // 제목
-            Text(statusTitle)
-                .font(.headline)
-                .foregroundStyle(AppColors.textPrimary)
-
-            // 설명
-            Text(statusDescription)
-                .font(.subheadline)
-                .foregroundStyle(AppColors.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 16)
-
-            // 설치 진행 상태 (설치 중일 때만)
-            if isInstalling {
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.8)
-
-                    if !installProgress.isEmpty {
-                        ScrollView {
-                            Text(installProgress)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(AppColors.textSecondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .frame(maxHeight: 100)
-                        .padding(8)
-                        .background(AppColors.controlBackground)
-                        .cornerRadius(6)
-                    }
-                }
-                .padding(.horizontal, 16)
+                Spacer()
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
 
-            // 버튼
-            if !isInstalling {
+            // 콘텐츠
+            VStack(spacing: 20) {
+                Spacer()
+
+                // 아이콘
+                Image(systemName: statusIcon)
+                    .font(.system(size: 40))
+                    .foregroundStyle(statusColor)
+
+                // 제목
+                Text(statusTitle)
+                    .font(.headline)
+                    .foregroundStyle(AppColors.textPrimary)
+
+                // 설명
+                Text(statusDescription)
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+
+                // 버튼
                 actionButtons
-            }
 
-            Spacer()
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .fileImporter(
+            isPresented: $showingFilePicker,
+            allowedContentTypes: [.unixExecutable, .item],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    onSelectCLIPath(url)
+                }
+            case .failure(let error):
+                print("File picker error: \(error)")
+            }
+        }
     }
 
     @ViewBuilder
     private var actionButtons: some View {
         VStack(spacing: 12) {
-            // 설치 스크립트가 있으면 자동 설치 버튼
-            if cliType.installScript != nil {
-                Button(action: {
-                    isInstalling = true
-                    onInstall()
-                }) {
-                    Label(L10n.get("ai.install.auto"), systemImage: "arrow.down.circle")
-                        .frame(minWidth: 200)
-                }
-                .buttonStyle(.borderedProminent)
+            // 다시 확인 버튼 (설치 후 확인용)
+            Button(action: onRetryCheck) {
+                Label(L10n.get("ai.install.retryCheck"), systemImage: "arrow.clockwise")
+                    .frame(minWidth: 200)
             }
+            .buttonStyle(.borderedProminent)
 
-            // 수동 설치 페이지 열기
-            Button(action: onOpenInstallPage) {
-                Label(L10n.get("ai.install.openPage"), systemImage: "safari")
+            // CLI 파일 직접 선택
+            Button(action: { showingFilePicker = true }) {
+                Label(L10n.get("ai.install.selectCLI"), systemImage: "folder")
                     .frame(minWidth: 200)
             }
             .buttonStyle(.bordered)
 
-            // 재확인 버튼
-            Button(action: onRetryCheck) {
-                Label(L10n.get("ai.install.recheck"), systemImage: "arrow.clockwise")
+            // 경로 복사 버튼
+            Button(action: copyPathToClipboard) {
+                Label(
+                    showCopiedFeedback ? L10n.get("ai.install.pathCopied") : L10n.get("ai.install.copyPath"),
+                    systemImage: showCopiedFeedback ? "checkmark" : "doc.on.doc"
+                )
+                .frame(minWidth: 200)
+            }
+            .buttonStyle(.bordered)
+
+            // 설치 페이지 열기
+            Button(action: onOpenInstallPage) {
+                Label(L10n.get("ai.install.openPage"), systemImage: "safari")
                     .frame(minWidth: 200)
             }
             .buttonStyle(.bordered)
@@ -107,6 +126,16 @@ struct CLIInstallGuideView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(AppColors.textSecondary)
+        }
+    }
+
+    private func copyPathToClipboard() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(defaultCLIPath, forType: .string)
+
+        showCopiedFeedback = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showCopiedFeedback = false
         }
     }
 
@@ -142,7 +171,7 @@ struct CLIInstallGuideView: View {
             return L10n.get("ai.install.checking")
         case .notInstalled:
             return L10n.get("ai.install.notInstalled").replacingOccurrences(of: "{cli}", with: cliType.displayName)
-        case .installationFailed(let error):
+        case .installationFailed:
             return L10n.get("ai.install.failed")
         default:
             return ""
@@ -167,9 +196,9 @@ struct CLIInstallGuideView: View {
     CLIInstallGuideView(
         cliType: .claude,
         installStatus: .notInstalled,
-        onInstall: {},
         onOpenInstallPage: {},
         onRetryCheck: {},
+        onSelectCLIPath: { _ in },
         onCancel: {}
     )
     .frame(width: 320, height: 500)

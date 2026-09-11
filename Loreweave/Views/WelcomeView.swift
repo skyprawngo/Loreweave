@@ -93,8 +93,7 @@ struct WelcomeView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(Array(projectManager.recentProjects.enumerated()), id: \.element.id) { index, project in
                                 RecentProjectRow(project: project, isEvenRow: index % 2 == 0) {
-                                    projectManager.openProject(project)
-                                    openEditorWindow()
+                                    if projectManager.openProject(project) { openEditorWindow() }
                                 } onDelete: {
                                     projectManager.deleteProject(project)
                                 }

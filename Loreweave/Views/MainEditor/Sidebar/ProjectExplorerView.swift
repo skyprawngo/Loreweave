@@ -99,6 +99,7 @@ struct ProjectExplorerView: View {
         .onHover { hovering in
             isViewHovered = hovering
         }
+        .onChange(of: fileSystemManager.revision) { _, _ in updateCache() }
         .onChange(of: fileSystemManager.projectRoot?.id) { _, _ in
             updateCache()
         }
@@ -446,10 +447,12 @@ struct ProjectExplorerView: View {
             fileSystemManager.showModifiedFileMoveDialog(fileName: sourceItem.name) { result in
                 switch result {
                 case .saveAndMove:
-                    if let content = getCurrentEditorContent?() {
-                        if let tabIndex = tabManager.findTab(with: sourceItem.url) {
-                            _ = tabManager.saveTab(at: tabIndex, content: content)
-                        }
+                    tabManager.flushEditor()
+                    guard let content = tabManager.getCachedContent(for: sourceItem.url),
+                          let index = tabManager.findTab(with: sourceItem.url),
+                          tabManager.saveTab(at: index, content: content) else {
+                        tabManager.showSaveError(for: sourceItem.url)
+                        return
                     }
                     self.checkNameConflictAndMove(sourceItem, to: destinationFolder)
                 case .cancel:

@@ -388,8 +388,45 @@ final class KeyboardShortcutManager {
         bindings.first { binding in
             binding.action != action &&
             binding.isEnabled &&
-            binding.key.lowercased() == key.lowercased() &&
+            Self.canonicalKey(binding.key) == Self.canonicalKey(key) &&
             binding.modifiers == modifiers
+        }
+    }
+
+    func action(matching event: NSEvent) -> ShortcutAction? {
+        let key: String
+        switch event.keyCode {
+        case 126: key = "up"
+        case 125: key = "down"
+        case 123: key = "left"
+        case 124: key = "right"
+        case 51: key = "backspace"
+        case 36, 76: key = "return"
+        case 48: key = "tab"
+        case 49: key = "space"
+        case 53: key = "escape"
+        case 115: key = "home"
+        case 119: key = "end"
+        case 116: key = "pageup"
+        case 121: key = "pagedown"
+        default: key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        }
+        var modifiers: ModifierKeys = []
+        if event.modifierFlags.contains(.command) { modifiers.insert(.command) }
+        if event.modifierFlags.contains(.option) { modifiers.insert(.option) }
+        if event.modifierFlags.contains(.control) { modifiers.insert(.control) }
+        if event.modifierFlags.contains(.shift) { modifiers.insert(.shift) }
+        return bindings.first { $0.isEnabled && Self.canonicalKey($0.key) == key && $0.modifiers == modifiers }?.action
+    }
+
+    /// Use the same named keys/aliases accepted by KeyEquivalent when matching AppKit events.
+    private static func canonicalKey(_ key: String) -> String {
+        switch key.lowercased() {
+        case "enter": return "return"
+        case "delete": return "backspace"
+        case "esc": return "escape"
+        case " ": return "space"
+        default: return key.lowercased()
         }
     }
 

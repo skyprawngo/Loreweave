@@ -84,11 +84,11 @@ struct EditorToolbarView: View {
 
     private var aiToolsMenu: some View {
         Menu {
-            Button(L10n.ai.refineText, action: {})
-            Button(L10n.ai.styleConvert, action: {})
-            Button(L10n.ai.continueWritingAction, action: {})
+            Button(L10n.ai.refineText) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.refineText) }
+            Button(L10n.ai.styleConvert) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.styleConvert) }
+            Button(L10n.ai.continueWritingAction) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.continueWritingAction) }
             Divider()
-            Button(L10n.ai.consistencyCheck, action: {})
+            Button(L10n.ai.consistencyCheck) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.consistencyCheck) }
         } label: {
             Label(L10n.ai.tools, systemImage: "wand.and.stars")
                 .font(.system(size: ToolbarConstants.smallIconFontSize))
@@ -168,6 +168,7 @@ private struct FontSizeControl: View {
                 .foregroundStyle(AppColors.textSecondary)
         }
         .controlBackground()
+        .fixedSize()  // 크기 고정하여 레이아웃 변동 방지
         .contentShape(Rectangle())
         .gesture(dragGesture)
         .onHover(perform: handleHover)
@@ -269,7 +270,7 @@ private struct FontPickerControl: View {
                     .font(.system(size: ToolbarConstants.labelFontSize))
                     .foregroundStyle(AppColors.textPrimary)
                     .lineLimit(1)
-                    .frame(maxWidth: 80)
+                    .frame(width: 80, alignment: .leading)  // maxWidth → width 고정
 
                 Image(systemName: "chevron.down")
                     .font(.system(size: ToolbarConstants.chevronFontSize))
@@ -278,6 +279,7 @@ private struct FontPickerControl: View {
             .controlBackground()
         }
         .buttonStyle(.plain)
+        .fixedSize()  // 크기 고정하여 레이아웃 변동 방지
         .help(L10n.get("settings.editor.fontName"))
     }
 
@@ -435,6 +437,7 @@ private struct LetterSpacingControl: View {
                 }
         }
         .controlBackground()
+        .fixedSize()  // 크기 고정하여 레이아웃 변동 방지
         .contentShape(Rectangle())
         .gesture(dragGesture)
         .onHover(perform: handleHover)

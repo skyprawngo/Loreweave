@@ -22,6 +22,9 @@ final class FileSystemManager {
     /// 파일 시스템 변경 감시자
     private var fileWatcher: DispatchSourceFileSystemObject?
     private var watchedDirectoryHandle: Int32 = -1
+    var operationError: String?
+    var revision = 0
+    private var directoryWatchers: [String: DispatchSourceFileSystemObject] = [:]
 
     /// 프로젝트 루트 URL
     private(set) var projectRootURL: URL?
@@ -46,6 +49,7 @@ final class FileSystemManager {
 
     /// 프로젝트 열기 및 루트 로드
     func initializeProject(at url: URL) {
+        stopWatching()
         projectRootURL = url
 
         // 프로젝트 루트 항목 생성
@@ -56,8 +60,6 @@ final class FileSystemManager {
         // 루트 자식 로드
         loadChildren(of: rootItem)
 
-        // 모든 폴더의 하위 항목 개수 로드 (UI 표시용)
-        loadChildCountsRecursively(of: rootItem)
 
         // 파일 감시 시작
         startWatching(at: url)
@@ -112,9 +114,11 @@ final class FileSystemManager {
 
             item.children = newChildren
             item.sortChildren()
+            revision += 1
+            watchDirectory(item)
         } catch {
             print("Failed to load directory contents: \(error)")
-            item.children = []
+            operationError = error.localizedDescription
         }
     }
 
@@ -128,9 +132,7 @@ final class FileSystemManager {
         // 펼칠 때만 자식 로드 (접을 때는 기존 데이터 유지)
         if item.isExpanded {
             // 자식이 없거나 비어있으면 로드
-            if item.children == nil || item.children?.isEmpty == true {
-                loadChildren(of: item)
-            }
+            loadChildren(of: item)
         }
     }
 
@@ -152,10 +154,10 @@ final class FileSystemManager {
             }
             parent.children?.append(newItem)
             parent.sortChildren()
-
+            revision += 1
             return newItem
         } catch {
-            print("Failed to create folder: \(error)")
+            operationError = error.localizedDescription
             return nil
         }
     }
@@ -168,7 +170,8 @@ final class FileSystemManager {
         let newURL = parent.url.appendingPathComponent(name)
 
         do {
-            try content.write(to: newURL, atomically: true, encoding: .utf8)
+            try DocumentFileStore.validateName(name)
+            try DocumentFileStore.create(content, at: newURL)
             let newItem = FileSystemItem(url: newURL, isDirectory: false, parent: parent)
 
             if parent.children == nil {
@@ -176,10 +179,10 @@ final class FileSystemManager {
             }
             parent.children?.append(newItem)
             parent.sortChildren()
-
+            revision += 1
             return newItem
         } catch {
-            print("Failed to create file: \(error)")
+            operationError = error.localizedDescription
             return nil
         }
     }
@@ -225,7 +228,7 @@ final class FileSystemManager {
             let baseName = nsFileName.deletingPathExtension
             if !baseName.isEmpty && baseName.count < fileName.count {
                 // 확장자가 있는 경우: 확장자 앞까지 선택
-                textField.currentEditor()?.selectedRange = NSRange(location: 0, length: baseName.count)
+                textField.currentEditor()?.selectedRange = NSRange(location: 0, length: (baseName as NSString).length)
             } else {
                 // 확장자가 없는 경우: 전체 선택
                 textField.selectText(nil)
@@ -279,7 +282,10 @@ final class FileSystemManager {
         let newURL = item.url.deletingLastPathComponent().appendingPathComponent(newName)
 
         do {
+            try DocumentFileStore.validateName(newName)
+            EditorTabManager.shared.flushEditor()
             try FileManager.default.moveItem(at: item.url, to: newURL)
+            EditorTabManager.shared.relocateTabs(from: item.url, to: newURL)
 
             // FileSystemItem은 클래스이므로 URL을 직접 변경할 수 없음
             // 부모의 children을 새로고침해야 함
@@ -289,7 +295,7 @@ final class FileSystemManager {
 
             return true
         } catch {
-            print("Failed to rename item: \(error)")
+            operationError = error.localizedDescription
             return false
         }
     }
@@ -335,7 +341,7 @@ final class FileSystemManager {
                 let baseName = nsFileName.deletingPathExtension
                 if !baseName.isEmpty && baseName.count < fileName.count {
                     // 확장자가 있는 경우: 확장자 앞까지 선택
-                    textField.currentEditor()?.selectedRange = NSRange(location: 0, length: baseName.count)
+                    textField.currentEditor()?.selectedRange = NSRange(location: 0, length: (baseName as NSString).length)
                     return
                 }
             }
@@ -353,6 +359,10 @@ final class FileSystemManager {
         // item.url이 실제 파일 시스템의 URL과 다를 수 있으므로 standardizedFileURL 사용
         let fileURL = item.url.standardizedFileURL
 
+        let manager = EditorTabManager.shared
+        let affected = manager.tabs.filter { DocumentFileStore.contains($0.url, in: fileURL) }
+        guard manager.prepareToClose(affected) else { return false }
+
         // 파일이 실제로 존재하는지 확인
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             print("File does not exist at path: \(fileURL.path)")
@@ -364,7 +374,8 @@ final class FileSystemManager {
         }
 
         do {
-            try FileManager.default.removeItem(at: fileURL)
+            try FileManager.default.trashItem(at: fileURL, resultingItemURL: nil)
+            manager.closeTabsUnder(folderURL: fileURL)
 
             // 부모의 children에서 제거
             if let parent = item.parent {
@@ -373,7 +384,7 @@ final class FileSystemManager {
 
             return true
         } catch {
-            print("Failed to delete item: \(error)")
+            operationError = error.localizedDescription
             return false
         }
     }
@@ -552,7 +563,11 @@ final class FileSystemManager {
         if newURL == item.url { return false }
 
         do {
+            try DocumentFileStore.validateName(targetName)
+            guard !DocumentFileStore.contains(destination.url, in: item.url) else { throw DocumentFileStore.Failure.invalidName }
+            EditorTabManager.shared.flushEditor()
             try FileManager.default.moveItem(at: item.url, to: newURL)
+            EditorTabManager.shared.relocateTabs(from: item.url, to: newURL)
 
             // 이전 부모에서 제거
             if let oldParent = item.parent {
@@ -564,7 +579,7 @@ final class FileSystemManager {
 
             return true
         } catch {
-            print("Failed to move item: \(error)")
+            operationError = error.localizedDescription
             return false
         }
     }
@@ -614,39 +629,28 @@ final class FileSystemManager {
 
     /// 프로젝트 루트 폴더 감시 시작
     private func startWatching(at url: URL) {
-        let fileDescriptor = open(url.path, O_EVTONLY)
-        guard fileDescriptor >= 0 else {
-            print("Failed to open directory for watching: \(url.path)")
-            return
-        }
-
-        watchedDirectoryHandle = fileDescriptor
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
-            eventMask: [.write, .delete, .rename, .extend],
-            queue: .main
-        )
-
-        source.setEventHandler { [weak self] in
-            self?.handleFileSystemChange()
-        }
-
-        source.setCancelHandler {
-            close(fileDescriptor)
-        }
-
-        source.resume()
-        fileWatcher = source
+        if let root = projectRoot { watchDirectory(root) }
     }
 
-    /// 파일 감시 중지
-    private func stopWatching() {
-        fileWatcher?.cancel()
-        fileWatcher = nil
-        if watchedDirectoryHandle >= 0 {
-            watchedDirectoryHandle = -1
+    private func watchDirectory(_ item: FileSystemItem) {
+        let path = item.url.path
+        guard directoryWatchers[path] == nil else { return }
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let owner = projectRootURL
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
+        source.setEventHandler { [weak self, weak item] in
+            guard let self, let item, self.projectRootURL == owner else { return }
+            self.loadChildren(of: item)
         }
+        source.setCancelHandler { close(fd) }
+        directoryWatchers[path] = source
+        source.resume()
+    }
+
+    private func stopWatching() {
+        for source in directoryWatchers.values { source.cancel() }
+        directoryWatchers.removeAll()
     }
 
     /// 파일 시스템 변경 처리
@@ -662,8 +666,6 @@ final class FileSystemManager {
         guard let rootItem = projectRoot else { return }
         loadChildren(of: rootItem)
 
-        // 모든 폴더의 하위 항목 개수 로드 (UI 표시용)
-        loadChildCountsRecursively(of: rootItem)
 
         // 펼쳐진 하위 폴더도 새로고침
         refreshExpandedChildren(of: rootItem)
