@@ -35,6 +35,12 @@ func expect(_ condition: @autoclosure () -> Bool, _ name: String) {
     precondition(condition(), name)
     print("PASS \(name)")
 }
+let menuView = LoreTextView(editorState: EditorState(text: "menu"))
+expect(menuView.responds(to: NSSelectorFromString("paste:")), "native paste selector")
+expect(menuView.responds(to: NSSelectorFromString("copy:")), "native copy selector")
+expect(menuView.responds(to: NSSelectorFromString("cut:")), "native cut selector")
+menuView.selectAll(nil)
+expect(menuView.editorState.copy() == "menu", "native select all")
 let value = "😀e\u{301}한\n👨‍👩‍👧‍👦Z"
 let document = TextDocument(text: value)
 for line in 0..<document.lineCount {
@@ -114,6 +120,49 @@ inputState.selection.moveCursor(line: 1, column: 0)
 expect(inputView.performConfiguredShortcut(.moveLineUp) && inputState.getText() == "two\none", "configured move-line command")
 expect(inputView.performConfiguredShortcut(.duplicateLineDown) && inputState.getText() == "two\ntwo\none", "configured duplicate command")
 expect(!inputView.performConfiguredShortcut(.unrelated), "unrelated shortcut falls through")
+
+let chunkDoc = TextDocument(text: (0..<1025).map { "line \($0) 한😀" }.joined(separator: "\n"))
+let chunkOriginal = chunkDoc.getText()
+let revisions = chunkDoc.chunkVersions
+chunkDoc.insert("Z", atLine: 256, column: 0)
+expect(chunkDoc.chunkVersions[0] == revisions[0] && chunkDoc.chunkVersions[2] == revisions[2], "unchanged chunks retain revision")
+expect(chunkDoc.getText().components(separatedBy: "\n")[256] == "Zline 256 한😀", "serialized chunk updates")
+chunkDoc.delete(fromLine: 256, column: 0, toLine: 256, column: 1)
+expect(chunkDoc.getText() == chunkOriginal, "chunk serialization restores exact Unicode")
+chunkDoc.insert("\nnew\n", atLine: 255, column: 2)
+expect(chunkDoc.getText() == chunkDoc.lines.map { $0.content }.joined(separator: "\n"), "cross chunk insertion serialization")
+chunkDoc.delete(fromLine: 254, column: 0, toLine: 770, column: 2)
+expect(chunkDoc.getText() == chunkDoc.lines.map { $0.content }.joined(separator: "\n"), "cross chunk deletion serialization")
+let chunkState = EditorState(text: (0..<800).map { $0 % 17 == 0 ? String(repeating: "한글😀 ", count: 40) : "short" }.joined(separator: "\n"))
+let chunkView = LoreTextView(editorState: chunkState)
+for width: CGFloat in [200, 350] {
+    var expectedY: CGFloat = 0
+    let referenceRenderer = LineRenderer(font: chunkState.configuration.font)
+    referenceRenderer.lineHeightMultiple = chunkState.configuration.lineHeightMultiple
+    for index in 0..<chunkState.document.lineCount {
+        expect(chunkView.yPosition(for: index, viewportWidth: width) == expectedY, "chunk origin \(width):\(index)")
+        expect(chunkView.lineIndex(atY: expectedY + 0.1, viewportWidth: width) == index, "height lookup \(width):\(index)")
+        expectedY += referenceRenderer.calculateHeight(for: chunkState.document.getLineObject(index)!, viewportWidth: width)
+    }
+    expect(chunkView.totalContentHeight(viewportWidth: width) == expectedY, "exact wrapped total")
+}
+chunkState.document.insert("\n" + String(repeating: "long ", count: 100), atLine: 255, column: 0)
+let boundaryY = chunkView.yPosition(for: 257, viewportWidth: 200)
+expect(chunkView.lineIndex(atY: boundaryY, viewportWidth: 200) == 257, "layout rebuild after structural edit")
+
+let resizeState = EditorState(text: String(repeating: "short 한😀\n", count: 10000))
+let resizeView = LoreTextView(editorState: resizeState)
+let narrowHeight = resizeView.totalContentHeight(viewportWidth: 400)
+let measuredAtNarrow = resizeView.layoutMeasurementCount
+expect(resizeView.totalContentHeight(viewportWidth: 700) == narrowHeight, "widening retains exact single-row heights")
+expect(resizeView.layoutMeasurementCount == measuredAtNarrow, "widening avoids Core Text remeasurement")
+_ = resizeView.totalContentHeight(viewportWidth: 400)
+expect(resizeView.layoutMeasurementCount == measuredAtNarrow, "panel return restores cached layout")
+resizeState.document.insert(String(repeating: "long ", count: 200), atLine: 300, column: 0)
+let editedNarrowHeight = resizeView.totalContentHeight(viewportWidth: 400)
+expect(editedNarrowHeight > narrowHeight, "cached width invalidates edited chunk")
+_ = resizeView.totalContentHeight(viewportWidth: 700)
+expect(resizeView.totalContentHeight(viewportWidth: 400) == editedNarrowHeight, "edited layout survives toggle roundtrip")
 print("ALL TEXT ENGINE REGRESSIONS PASSED")
 '''
 with tempfile.TemporaryDirectory(prefix='lore-text-tests-') as directory:

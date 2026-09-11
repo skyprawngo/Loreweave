@@ -11,99 +11,65 @@ struct TabBarView: View {
     @State private var tabManager = EditorTabManager.shared
     private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
 
-    @State private var isAddButtonHovered = false
-    @State private var isAddButtonPressed = false
     @State private var draggingTabId: UUID?
     @State private var dragOverTabId: UUID?
     @State private var isDragOverTrailingArea = false
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        GeometryReader { geometry in
             HStack(spacing: 4) {
-                ForEach(Array(tabManager.tabs.enumerated()), id: \.element.id) { index, tab in
-                    TabItemView(
-                        title: tab.title,
-                        isModified: tab.isModified,
-                        justSaved: tab.justSaved,
-                        isSelected: tabManager.selectedTabIndex == index,
-                        fileExists: tab.fileExists,
-                        isDragging: draggingTabId == tab.id,
-                        isDragOver: dragOverTabId == tab.id,
-                        onSelect: { tabManager.selectTab(at: index) },
-                        onClose: { tabManager.closeTab(at: index) }
-                    )
-                    .onDrag {
-                        draggingTabId = tab.id
-                        return NSItemProvider(object: tab.id.uuidString as NSString)
-                    }
-                    .onDrop(of: [.text], delegate: TabDropDelegate(
-                        tabId: tab.id,
-                        tabIndex: index,
-                        tabManager: tabManager,
-                        draggingTabId: $draggingTabId,
-                        dragOverTabId: $dragOverTabId
-                    ))
-                }
-
-                Button(action: { showNewFileDialog() }) {
-                    ZStack {
-                        addButtonBackground
-                        Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(AppColors.addButtonIcon)
-                    }
-                    .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .clipShape(Capsule())
-                .onHover { isAddButtonHovered = $0 }
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { _ in isAddButtonPressed = true }
-                        .onEnded { _ in isAddButtonPressed = false }
-                )
-                .padding(.leading, 4)
-                .help(L10n.tabs.newTab)
-
-                // 마지막 위치로 탭 이동을 위한 드롭 영역
-                Spacer()
-                    .frame(minWidth: 40)
-                    .contentShape(Rectangle())
-                    .onDrop(of: [.text], delegate: TrailingDropDelegate(
-                        tabManager: tabManager,
-                        draggingTabId: $draggingTabId,
-                        dragOverTabId: $dragOverTabId,
-                        isDragOverTrailingArea: $isDragOverTrailingArea
-                    ))
-                    .overlay(alignment: .leading) {
-                        if isDragOverTrailingArea {
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.accentColor)
-                                .frame(width: 3, height: 20)
-                                .shadow(color: Color.accentColor.opacity(0.6), radius: 4)
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(Array(tabManager.tabs.enumerated()), id: \.element.id) { index, tab in
+                                TabItemView(
+                                    title: tab.title,
+                                    isModified: tab.isModified,
+                                    justSaved: tab.justSaved,
+                                    isSelected: tabManager.selectedTabIndex == index,
+                                    fileExists: tab.fileExists,
+                                    width: TabBarSizing.width(available: max(0, geometry.size.width - 48),
+                                        count: tabManager.tabs.count, selected: tabManager.selectedTabIndex == index),
+                                    isDragging: draggingTabId == tab.id,
+                                    isDragOver: dragOverTabId == tab.id,
+                                    onSelect: { tabManager.selectTab(at: index) },
+                                    onClose: { tabManager.closeTab(at: index) }
+                                )
+                                .id(tab.id)
+                                .onDrag {
+                                    draggingTabId = tab.id
+                                    return NSItemProvider(object: tab.id.uuidString as NSString)
+                                }
+                                .onDrop(of: [.text], delegate: TabDropDelegate(tabId: tab.id, tabIndex: index,
+                                    tabManager: tabManager, draggingTabId: $draggingTabId, dragOverTabId: $dragOverTabId))
+                            }
+                            Color.clear.frame(width: 8, height: 28)
+                                .contentShape(Rectangle())
+                                .onDrop(of: [.text], delegate: TrailingDropDelegate(tabManager: tabManager,
+                                    draggingTabId: $draggingTabId, dragOverTabId: $dragOverTabId,
+                                    isDragOverTrailingArea: $isDragOverTrailingArea))
                         }
                     }
+                    .onChange(of: tabManager.selectedTab?.id) { _, id in
+                        if let id { proxy.scrollTo(id, anchor: .center) }
+                    }
+                    .onChange(of: geometry.size.width) { _, _ in
+                        if let id = tabManager.selectedTab?.id { proxy.scrollTo(id, anchor: .center) }
+                    }
+                    .onAppear {
+                        if let id = tabManager.selectedTab?.id { proxy.scrollTo(id, anchor: .center) }
+                    }
+                }
+                Button(action: showNewFileDialog) {
+                    Image(systemName: "plus").frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.get("explorer.newFile"))
+                .accessibilityLabel(L10n.get("explorer.newFile"))
             }
-            .padding(.horizontal, 8)
+            .frame(height: geometry.size.height, alignment: .center)
         }
         .frame(height: 36)
-        .overlay(alignment: .bottom) {
-            if tabManager.tabs.isEmpty {
-                Divider()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var addButtonBackground: some View {
-        if isAddButtonPressed {
-            AppColors.addButtonPressed
-        } else if isAddButtonHovered {
-            AppColors.addButtonHover
-        } else {
-            Color.clear
-        }
     }
 
     private func showNewFileDialog() {
@@ -123,6 +89,7 @@ struct TabItemView: View {
     let justSaved: Bool
     let isSelected: Bool
     let fileExists: Bool
+    var width: CGFloat = 180
     var isDragging: Bool = false
     var isDragOver: Bool = false
     let onSelect: () -> Void
@@ -201,9 +168,12 @@ struct TabItemView: View {
             Text(title)
                 .font(.system(size: 12))
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .strikethrough(!fileExists, color: .secondary)
                 .foregroundStyle(fileExists ? AppColors.tabText : .secondary)
         }
+        .frame(width: max(30, width - 26))
         .padding(.leading, 12)
         .padding(.trailing, 14)
         .padding(.vertical, 8)
@@ -227,6 +197,12 @@ struct TabItemView: View {
         }
         .animation(.easeOut(duration: 0.15), value: isDragging)
         .animation(.easeOut(duration: 0.15), value: isDragOver)
+        .accessibilityElement(children: .contain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onSelect() }
+        .accessibilityAction(named: Text(L10n.tabs.close)) { onClose() }
         .onTapGesture(perform: onSelect)
         .onHover { hovering in
             isHovering = hovering
@@ -348,4 +324,14 @@ struct TrailingDropDelegate: DropDelegate {
 
 #Preview {
     TabBarView()
+}
+
+/// Compress inactive tabs first; retain a readable minimum, then allow horizontal overflow.
+enum TabBarSizing {
+    static func width(available: CGFloat, count: Int, selected: Bool) -> CGFloat {
+        guard count > 1 else { return min(220, max(96, available)) }
+        let shared = max(0, available - CGFloat(count - 1) * 4) / (CGFloat(count) + 0.4)
+        let inactive = min(160, max(64, min(shared, (available - CGFloat(count - 1) * 4 - 96) / CGFloat(count - 1))))
+        return selected ? min(220, max(96, inactive * 1.4)) : inactive
+    }
 }

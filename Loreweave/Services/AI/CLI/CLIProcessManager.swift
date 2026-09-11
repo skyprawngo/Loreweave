@@ -29,14 +29,15 @@ final class CLIProcessManager {
             if let sessionId { args += ["--resume", sessionId] }
             arguments = args
         case .chatgpt:
-            var args = ["--ask-for-approval", "never", "exec", "--json", "--sandbox", "read-only",
+            try LoreCodexEnvironment.prepare()
+            var args = LoreCodexEnvironment.arguments + ["--ask-for-approval", "never", "exec", "--json", "--sandbox", "read-only",
                         "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"]
             if let sessionId { args += ["resume", sessionId] }
             args.append("-")
             arguments = args
         }
         let current = CLIRequestRunner(path: path, arguments: arguments, prompt: prompt,
-                                       workingDirectory: workingDirectory, streamHandler: streamHandler)
+                                       workingDirectory: workingDirectory, environment: cliType == .chatgpt ? LoreCodexEnvironment.environment() : nil, streamHandler: streamHandler)
         runner = current
         defer { if runner === current { runner = nil } }
         return try await withTaskCancellationHandler {
@@ -148,11 +149,13 @@ private final class CLIRequestRunner: @unchecked Sendable {
     private var finished = false
     private var cancelled = false
     private var timedOut = false
+    private let environment: [String: String]?
     private let prompt: String
     private let streamHandler: @MainActor @Sendable (String) -> Void
 
-    init(path: String, arguments: [String], prompt: String, workingDirectory: URL?,
+    init(path: String, arguments: [String], prompt: String, workingDirectory: URL?, environment: [String: String]? = nil,
          streamHandler: @escaping @MainActor @Sendable (String) -> Void) {
+        self.environment = environment
         self.path = path
         self.arguments = arguments
         self.prompt = prompt
@@ -200,7 +203,7 @@ private final class CLIRequestRunner: @unchecked Sendable {
             else { code = posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path) }
             if code != 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(code)) }
         }
-        var environment = ProcessInfo.processInfo.environment
+        var environment = self.environment ?? ProcessInfo.processInfo.environment
         environment["PATH"] = CLIDetector.searchPaths.joined(separator: ":") + ":" + (environment["PATH"] ?? "")
         let argv = ([path] + arguments).map { strdup($0) } + [nil]
         let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]

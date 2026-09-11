@@ -16,22 +16,40 @@ import UniformTypeIdentifiers
 
 // MARK: - Toolbar Search Field
 
+final class ToolbarNativeSearchField: NSSearchField {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window, self.window === window else { return }
+            window.makeFirstResponder(self)
+        }
+    }
+}
+
 /// 툴바용 NSSearchField 래퍼
 struct ToolbarSearchField: NSViewRepresentable {
     @Binding var text: String
     var prompt: String
     var onSearch: () -> Void = {}
+    var onCancel: () -> Void = {}
 
     func makeNSView(context: Context) -> NSSearchField {
-        let searchField = NSSearchField()
+        let searchField = ToolbarNativeSearchField()
         searchField.placeholderString = prompt
         searchField.delegate = context.coordinator
         searchField.bezelStyle = .roundedBezel
         searchField.focusRingType = .none
+        DispatchQueue.main.async { [weak searchField] in
+            guard let searchField else { return }
+            searchField.window?.makeFirstResponder(searchField)
+        }
         return searchField
     }
 
     func updateNSView(_ nsView: NSSearchField, context: Context) {
+        context.coordinator.onSearch = onSearch
+        context.coordinator.onCancel = onCancel
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
@@ -44,12 +62,14 @@ struct ToolbarSearchField: NSViewRepresentable {
     class Coordinator: NSObject, NSSearchFieldDelegate {
         @Binding var text: String
 
+        var onCancel: () -> Void = {}
         var onSearch: () -> Void
         init(text: Binding<String>, onSearch: @escaping () -> Void) {
             _text = text
             self.onSearch = onSearch
         }
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) { onCancel(); return true }
             if commandSelector == #selector(NSResponder.insertNewline(_:)) { onSearch(); return true }
             return false
         }
@@ -61,16 +81,22 @@ struct ToolbarSearchField: NSViewRepresentable {
     }
 }
 
+private struct ProjectSearchPresentation: Identifiable {
+    let id = UUID()
+    let projectURL: URL?
+}
+
 struct MainEditorView: View {
     @Bindable var projectManager: ProjectManager
     @EnvironmentObject var appCommands: AppCommands
+    @Environment(\.openWindow) private var openWindow
 
     private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
     @State private var tabManager = EditorTabManager.shared
 
     // AI 패널 크기
     @State private var aiPanelWidth = UserSettings.shared.aiAssistantPanelWidth
-    @State private var showingProjectSearch = false
+    @State private var projectSearchPresentation: ProjectSearchPresentation?
     @State private var showingNewProject = false
     @State private var newProjectName = ""
     @State private var newProjectDirectory: URL?
@@ -80,6 +106,14 @@ struct MainEditorView: View {
     @State private var isAIDetailView: Bool = false  // AI 패널 상세 뷰 모드
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var searchText: String = ""
+    @State private var isSearchExpanded = false
+    @State private var windowWidth: CGFloat = 1400
+    @State private var editorWidth: CGFloat = 800
+    @State private var sidebarWidth: CGFloat = 250
+
+    private var resolvedAIPanelWidth: CGFloat {
+        min(aiPanelWidth, max(280, windowWidth - (columnVisibility == .detailOnly ? 0 : sidebarWidth) - 360))
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -88,76 +122,94 @@ struct MainEditorView: View {
                 // 사이드바 (ProjectExplorerView)
                 ProjectExplorerView()
                     .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebarWidth = $0 }
             } detail: {
                 // 에디터 컨테이너
                 EditorContainerView(projectManager: projectManager)
                     .environmentObject(appCommands)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { editorWidth = $0 }
             }
             .navigationSplitViewStyle(.balanced)
 
             // AI 패널 (우측)
             if isAIPanelVisible {
-                Rectangle().fill(AppColors.separator).frame(width: 5)
+                Rectangle().fill(AppColors.separator).frame(width: 1)
+                    .padding(.horizontal, 3)
+                    .contentShape(Rectangle())
                     .gesture(DragGesture().onChanged { value in
                         aiPanelWidth = min(600, max(280, UserSettings.shared.aiAssistantPanelWidth - value.translation.width))
                     }.onEnded { _ in UserSettings.shared.aiAssistantPanelWidth = aiPanelWidth })
-                AIAssistantView(
-                    projectFolderURL: projectManager.currentProject?.path,
-                    isInDetailView: $isAIDetailView
-                )
-                .frame(width: aiPanelWidth)
-                .ignoresSafeArea(.container, edges: .top)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+            // Hiding a panel must not recreate its account/chat state or cancel its request.
+            AIAssistantView(
+                projectFolderURL: projectManager.currentProject?.path,
+                isInDetailView: $isAIDetailView
+            )
+            .frame(width: resolvedAIPanelWidth)
+            .frame(width: isAIPanelVisible ? resolvedAIPanelWidth : 0, alignment: .trailing)
+            .clipped()
+            .accessibilityHidden(!isAIPanelVisible)
+            .allowsHitTesting(isAIPanelVisible)
         }
-        .background(ThemeAwareBackground(material: .sidebar, blendingMode: .behindWindow))
-        .ignoresSafeArea(.container, edges: .top)
-        .animation(.easeInOut(duration: 0.25), value: isAIPanelVisible)
-        .animation(.easeInOut(duration: 0.25), value: columnVisibility)
+        .background(ThemeAwareBackground(material: .sidebar, blendingMode: .behindWindow)
+            .ignoresSafeArea(edges: .top))
+        .frame(minWidth: 1000, minHeight: 500)
+        // Avoid full-document wrap layout at every animation frame when panels resize.
+        .transaction { $0.animation = nil }
+
         .toolbar {
-            // 네비게이션 버튼 + 검색바
-            ToolbarItemGroup(placement: .navigation) {
-                NavigationButtonsView(
-                    onBack: { goBack() },
-                    onForward: { goForward() }
-                )
-
-                // 검색바 (네비게이션 버튼 오른쪽에 배치, 간격 추가)
-                ToolbarSearchField(text: $searchText, prompt: L10n.get("toolbar.searchPlaceholder"), onSearch: { showingProjectSearch = true })
-                    .frame(minWidth: 180, maxWidth: 250)
-                    .padding(.leading, 12)
-                Button { showingProjectSearch = true } label: { Image(systemName: "magnifyingglass") }
-                    .help(L10n.get("search.project"))
-            }
-
-            // AI 뒤로가기 버튼 (상세 뷰일 때만 표시)
-            ToolbarItem(placement: .primaryAction) {
-                if isAIPanelVisible && isAIDetailView {
-                    Button(action: {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            isAIDetailView = false
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 8) {
+                    NavigationButtonsView(onBack: goBack, onForward: goForward,
+                        canGoBack: tabManager.canGoBack, canGoForward: tabManager.canGoForward)
+                    Group {
+                        if isSearchExpanded {
+                            ToolbarSearchField(text: $searchText,
+                                prompt: L10n.get("toolbar.searchPlaceholder"),
+                                onSearch: { projectSearchPresentation = ProjectSearchPresentation(projectURL: projectManager.currentProject?.path) },
+                                onCancel: { isSearchExpanded = false })
+                                .frame(width: min(200, max(140, editorWidth * 0.3)), height: 30)
+                                .glassEffect(.regular, in: .capsule)
+                        } else {
+                            Button { isSearchExpanded = true } label: {
+                                Image(systemName: "magnifyingglass").frame(width: 16, height: 16)
+                            }
+                            .buttonStyle(.plain)
+                            .frame(width: 32, height: 32)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                            .help(L10n.get("search.project"))
+                            .accessibilityLabel(L10n.get("search.project"))
                         }
-                    }) {
-                        Label(L10n.get("ai.chat.backToList"), systemImage: "chevron.left")
                     }
-                    .help(L10n.get("ai.chat.backToList"))
+                    TabBarView()
+                        .frame(minWidth: 100, maxWidth: .infinity)
                 }
+                .animation(.smooth(duration: 0.22), value: isSearchExpanded)
+                .frame(width: max(300, windowWidth - (columnVisibility == .detailOnly ? 0 : sidebarWidth) - 180))
             }
+            .sharedBackgroundVisibility(.hidden)
 
-            // AI 패널 토글 버튼 (가장 우측에 배치)
-            ToolbarItem(placement: .confirmationAction) {
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        isAIPanelVisible.toggle()
-                    }
-                }) {
-                    Image(systemName: isAIPanelVisible ? "sidebar.trailing" : "sparkle")
+            ToolbarSpacer(.flexible, placement: .primaryAction)
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button { NSApp.keyWindow?.toggleFullScreen(nil) } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .help(L10n.get("toolbar.toggleFullScreen"))
+                .accessibilityLabel(L10n.get("toolbar.toggleFullScreen"))
+                Button { openWindow(id: "settings") } label: {
+                    Image(systemName: "gearshape")
+                }
+                .help(L10n.get("sidebar.settings"))
+                .accessibilityLabel(L10n.get("sidebar.settings"))
+                Button { isAIPanelVisible.toggle() } label: {
+                    Image(systemName: "sidebar.trailing")
                 }
                 .help(L10n.ai.togglePanel)
+                .accessibilityLabel(L10n.ai.togglePanel)
             }
         }
-        .sheet(isPresented: $showingProjectSearch) {
-            ProjectSearchView(projectURL: projectManager.currentProject?.path, query: searchText)
+        .sheet(item: $projectSearchPresentation) { presentation in
+            ProjectSearchView(projectURL: presentation.projectURL, query: $searchText)
         }
         .alert(L10n.get("storage.operationFailed"), isPresented: Binding(
             get: { fileSystemManager.operationError != nil },
@@ -187,6 +239,8 @@ struct MainEditorView: View {
                 initializeFileSystem()
             } onCancel: { showingNewProject = false }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0 }
+        .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .onAppear {
             initializeFileSystem()
@@ -272,17 +326,13 @@ struct AppCommandHandlerModifier: ViewModifier {
             // UI 토글 커맨드
             .onReceive(appCommands.$toggleSidebarRequested) { requested in
                 if requested {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        columnVisibility = columnVisibility == .all ? .detailOnly : .all
-                    }
+                    columnVisibility = columnVisibility == .all ? .detailOnly : .all
                     appCommands.toggleSidebarRequested = false
                 }
             }
             .onReceive(appCommands.$toggleAIPanelRequested) { requested in
                 if requested {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isAIPanelVisible.toggle()
-                    }
+                    isAIPanelVisible.toggle()
                     appCommands.toggleAIPanelRequested = false
                 }
             }

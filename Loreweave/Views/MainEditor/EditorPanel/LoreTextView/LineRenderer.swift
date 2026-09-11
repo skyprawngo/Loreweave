@@ -15,6 +15,9 @@ import CoreText
 final class LineRenderCache {
     /// CTFrame 캐시 (Word Wrap 지원)
     var ctFrame: CTFrame?
+    var wrappedLines: [CTLine] = []
+    var wrappedKey: Int?
+    var lastUse: UInt64 = 0
     /// CTLine 캐시 (단일 행)
     var ctLine: CTLine?
     /// 렌더링된 너비
@@ -27,6 +30,8 @@ final class LineRenderCache {
     var cacheKey: Int = 0
 
     func invalidate() {
+        wrappedLines.removeAll()
+        wrappedKey = nil
         ctFrame = nil
         ctLine = nil
         cacheKey = 0
@@ -89,7 +94,8 @@ final class LineRenderer {
     private var lineCache: [UUID: LineRenderCache] = [:]
 
     /// 최대 캐시 크기
-    private let maxCacheSize = 500
+    private let maxCacheSize = 768
+    private var cacheClock: UInt64 = 0
 
     // MARK: - Initialization
 
@@ -205,36 +211,24 @@ final class LineRenderer {
         in context: CGContext,
         viewportWidth: CGFloat
     ) {
-        let attributedString = createAttributedString(line.content)
-
-        // CTTypesetter를 사용하여 각 줄을 직접 생성
-        let typesetter = CTTypesetterCreateWithAttributedString(attributedString)
-        let stringLength = attributedString.length
-
-        context.saveGState()
-        context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
-
-        var startIndex = 0
-        var wrappedLineIndex = 0
-
-        while startIndex < stringLength {
-            // 해당 너비에 맞는 줄 길이 계산
-            let lineLength = CTTypesetterSuggestLineBreak(typesetter, startIndex, Double(viewportWidth))
-            guard lineLength > 0 else { break }
-
-            // CTLine 생성
-            let ctLine = CTTypesetterCreateLine(typesetter, CFRange(location: startIndex, length: lineLength))
-
-            // 해당 줄 그리기
-            let lineY = origin.y + CGFloat(wrappedLineIndex) * lineHeight + baselineOffset
-            context.textPosition = CGPoint(x: origin.x, y: lineY)
-            CTLineDraw(ctLine, context)
-
-            startIndex += lineLength
-            wrappedLineIndex += 1
+        let cache = getOrCreateCache(for: line)
+        let key = computeCacheKey(content: line.content, width: viewportWidth)
+        if cache.wrappedKey != key {
+            let attributed = createAttributedString(line.content)
+            let typesetter = CTTypesetterCreateWithAttributedString(attributed)
+            var offset = 0
+            cache.wrappedLines.removeAll(keepingCapacity: true)
+            while offset < attributed.length {
+                let length = CTTypesetterSuggestLineBreak(typesetter, offset, Double(viewportWidth))
+                guard length > 0 else { break }
+                cache.wrappedLines.append(CTTypesetterCreateLine(typesetter, CFRange(location: offset, length: length)))
+                offset += length
+            }
+            cache.wrappedKey = key
         }
-
-        context.restoreGState()
+        for (row, ctLine) in cache.wrappedLines.enumerated() {
+            drawLine(ctLine, at: CGPoint(x: origin.x, y: origin.y + CGFloat(row) * lineHeight), in: context)
+        }
     }
 
     func renderComposition(before: String, marked: String, after: String,
@@ -455,28 +449,31 @@ final class LineRenderer {
         hasher.combine(content)
         hasher.combine(font.pointSize)
         hasher.combine(textColor)
-        hasher.combine(Int(width))
+        hasher.combine(width)
         hasher.combine(wordWrapEnabled)
-        hasher.combine(Int(letterSpacing * 100))
+        hasher.combine(letterSpacing)
         return hasher.finalize()
     }
 
     // MARK: - Cache Management
 
     private func getOrCreateCache(for line: TextLine) -> LineRenderCache {
+        cacheClock &+= 1
         if let cache = lineCache[line.id] {
+            cache.lastUse = cacheClock
             return cache
         }
 
         // 캐시 크기 제한
         if lineCache.count >= maxCacheSize {
-            let keysToRemove = Array(lineCache.keys.prefix(maxCacheSize / 2))
+            let keysToRemove = lineCache.sorted { $0.value.lastUse < $1.value.lastUse }.prefix(maxCacheSize / 4).map { $0.key }
             for key in keysToRemove {
                 lineCache.removeValue(forKey: key)
             }
         }
 
         let cache = LineRenderCache()
+        cache.lastUse = cacheClock
         lineCache[line.id] = cache
         return cache
     }

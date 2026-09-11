@@ -9,6 +9,7 @@ import SwiftUI
 
 struct AIAssistantContainerView: View {
     @State private var viewModel = AIAssistantViewModel()
+    @State private var showingSettings = false
     @State private var aiAssistantEnabled = UserSettings.shared.aiAssistantEnabled
 
     var projectFolderURL: URL?
@@ -20,19 +21,29 @@ struct AIAssistantContainerView: View {
             if let error = viewModel.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled).padding(12)
             }
-            if !aiAssistantEnabled {
-                AIInactiveView {
-                    viewModel.startConnection()
-                    aiAssistantEnabled = true
-                }
+            if aiAssistantEnabled, case .connected(let type) = viewModel.connectionState {
+                chatView(for: type)
             } else {
-                connectionStateView
+                ContentUnavailableView {
+                    Label(L10n.get("ai.workspace.title"), systemImage: "bubble.left.and.bubble.right")
+                } description: {
+                    Text(L10n.get("ai.workspace.connectionHint"))
+                } actions: {
+                    Button(L10n.get("ai.workspace.settings")) { openSettings() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showingSettings) { settingsPage }
         .onAppear { viewModel.setProject(projectFolderURL) }
-        .onDisappear { viewModel.cancelSend() }
+        .onDisappear { viewModel.cancelSend(); viewModel.chatGPTAccount.cancelLogin() }
         .onChange(of: projectFolderURL) { _, newValue in viewModel.setProject(newValue) }
+        .onChange(of: viewModel.chatGPTAccount.account) { _, account in
+            guard viewModel.selectedCLIType == .chatgpt else { return }
+            if account != nil { viewModel.completeConnection(.chatgpt) }
+            else { viewModel.cancelSend(); viewModel.connectionState = .ready(.chatgpt) }
+        }
         .onChange(of: viewModel.selectedCardId) { _, newValue in
             // 내부 상태 변경 → 외부로 전파
             let newIsInDetailView = newValue != nil
@@ -57,6 +68,24 @@ struct AIAssistantContainerView: View {
         }
     }
 
+    private func openSettings() {
+        if !aiAssistantEnabled { viewModel.startConnection(); aiAssistantEnabled = true }
+        showingSettings = true
+    }
+
+    private var settingsPage: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(L10n.get("ai.workspace.settings")).font(.headline)
+                Spacer()
+                Button(L10n.get("common.close")) { showingSettings = false }
+                    .keyboardShortcut(.cancelAction)
+            }.padding(16)
+            Divider()
+            connectionStateView
+        }.frame(width: 500, height: 560)
+    }
+
     // MARK: - Connection State View
 
     @ViewBuilder
@@ -78,8 +107,33 @@ struct AIAssistantContainerView: View {
         case .cliNotInstalled(let cliType), .installingCLI(let cliType):
             cliInstallGuide(for: cliType, status: viewModel.installStatus)
 
-        case .ready(let cliType), .connected(let cliType):
-            chatView(for: cliType)
+        case .ready(let cliType):
+            if cliType == .chatgpt {
+                VStack {
+                    ChatGPTAccountView(service: viewModel.chatGPTAccount, compact: false)
+                    Button(L10n.get("ai.chat.changeAI")) { viewModel.changeAI() }
+                }
+            }
+            else { Button(L10n.get("common.retry")) { viewModel.checkCLIInstallation(cliType) } }
+        case .connected(let cliType):
+            Form {
+                Section(L10n.get("settings.aiProvider")) {
+                    LabeledContent(L10n.get("settings.aiProvider"), value: cliType.displayName)
+                    Button(L10n.get("ai.chat.changeAI")) { viewModel.changeAI() }
+                        .disabled(viewModel.isProcessing)
+                }
+                if cliType == .chatgpt {
+                    Section(L10n.get("ai.oauth.manage")) {
+                        ChatGPTAccountView(service: viewModel.chatGPTAccount, compact: false)
+                    }
+                }
+                Section {
+                    Button(L10n.get("ai.chat.disconnect")) { viewModel.disconnect() }
+                        .disabled(viewModel.isProcessing)
+                } footer: {
+                    Text(L10n.get("ai.workspace.disconnectHint"))
+                }
+            }.formStyle(.grouped)
 
         case .error(let message):
             errorView(message)
@@ -112,13 +166,11 @@ struct AIAssistantContainerView: View {
             onSend: { cardId in viewModel.sendMessage(continueFromCardId: cardId) },
             onCancel: viewModel.cancelSend,
             onClearHistory: viewModel.clearHistory,
-            onChangeAI: viewModel.changeAI,
-            onDisconnect: viewModel.disconnect,
             onDeleteCard: viewModel.deleteCard,
             onTagChanged: viewModel.saveTaggedCards,
             onSelectionResponse: viewModel.sendSelectionResponse,
-            projectFolderURL: projectFolderURL,
-            onPreviewDocument: viewModel.currentDocumentSnapshot
+            onPreviewDocument: viewModel.currentDocumentSnapshot,
+            onOpenSettings: openSettings
         )
     }
 

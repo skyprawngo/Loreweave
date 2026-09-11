@@ -83,6 +83,8 @@ final class GutterView: NSView {
     /// 특정 행까지의 Y 위치를 반환하는 클로저 (Word Wrap 지원)
     var yPositionProvider: ((Int) -> CGFloat)?
 
+    var lineIndexProvider: ((CGFloat) -> Int)?
+
     // MARK: - Initialization
 
     override init(frame frameRect: NSRect) {
@@ -173,30 +175,10 @@ final class GutterView: NSView {
 
     /// 동적 행 높이로 줄번호 그리기 (Word Wrap 지원)
     private func drawWithDynamicHeight(dirtyRect: NSRect, context: CGContext, rowHeightProvider: (Int) -> CGFloat, yPositionProvider: (Int) -> CGFloat) {
-        // dirtyRect 범위에 해당하는 행 찾기
-        var startLine: Int?
-        var endLine: Int?
-
-        for lineIndex in 0..<totalLineCount {
-            let y = yPositionProvider(lineIndex)
-            let rowHeight = rowHeightProvider(lineIndex)
-            let lineBottom = y + rowHeight
-
-            // dirtyRect와 겹치는지 확인
-            if lineBottom > dirtyRect.minY && y < dirtyRect.maxY {
-                if startLine == nil {
-                    startLine = lineIndex
-                }
-                endLine = lineIndex
-            }
-
-            // dirtyRect를 지나쳤으면 중단
-            if y > dirtyRect.maxY {
-                break
-            }
-        }
-
-        guard let start = startLine, let end = endLine else { return }
+        let visible = dirtyRect.intersection(visibleRect)
+        guard !visible.isEmpty, let lineIndexProvider else { return }
+        let start = lineIndexProvider(visible.minY)
+        let end = lineIndexProvider(visible.maxY)
 
         for lineIndex in start...end {
             let y = yPositionProvider(lineIndex)
@@ -261,17 +243,7 @@ final class GutterView: NSView {
     }
 
     private func lineNumberAt(y: CGFloat) -> Int {
-        // 동적 높이 지원 시
-        if let yPositionProvider = yPositionProvider, let rowHeightProvider = rowHeightProvider {
-            for lineIndex in 0..<totalLineCount {
-                let lineY = yPositionProvider(lineIndex)
-                let rowHeight = rowHeightProvider(lineIndex)
-                if y >= lineY && y < lineY + rowHeight {
-                    return lineIndex + 1
-                }
-            }
-            return totalLineCount
-        }
+        if let lineIndexProvider { return lineIndexProvider(y) + 1 }
 
         // 고정 높이
         guard lineHeight > 0 else { return 1 }

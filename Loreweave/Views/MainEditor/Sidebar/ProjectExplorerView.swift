@@ -25,7 +25,7 @@ struct FlatFileItem: Identifiable {
 }
 
 struct ProjectExplorerView: View {
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
     private var projectManager: ProjectManager { ProjectManager.shared }
@@ -119,28 +119,34 @@ struct ProjectExplorerView: View {
             Text(projectManager.currentProject?.name ?? L10n.sidebar.project)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(AppColors.sidebarHeaderText)
-                .textCase(.uppercase)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(projectManager.currentProject?.name ?? L10n.sidebar.project)
 
             Spacer()
 
             // 새 파일 버튼
             Button(action: { showNewFileDialog() }) {
                 Image(systemName: "doc.badge.plus")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundStyle(AppColors.toolbarIcon)
+                    .frame(width: 24, height: 26)
             }
             .buttonStyle(.plain)
             .help(L10n.get("explorer.newFile"))
+            .accessibilityLabel(L10n.get("explorer.newFile"))
             .disabled(fileSystemManager.projectRoot == nil)
 
             // 새 폴더 버튼
             Button(action: { showNewFolderDialog() }) {
                 Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundStyle(AppColors.toolbarIcon)
+                    .frame(width: 24, height: 26)
             }
             .buttonStyle(.plain)
             .help(L10n.get("explorer.newFolder"))
+            .accessibilityLabel(L10n.get("explorer.newFolder"))
             .disabled(fileSystemManager.projectRoot == nil)
 
             // 새로고침 버튼
@@ -156,7 +162,9 @@ struct ProjectExplorerView: View {
                 }
             }
             .buttonStyle(.plain)
+            .frame(width: 24, height: 26)
             .help(L10n.get("explorer.refresh"))
+            .accessibilityLabel(L10n.get("explorer.refresh"))
             .disabled(isRefreshing || fileSystemManager.projectRoot == nil)
         }
         .padding(.horizontal, 8)
@@ -168,13 +176,14 @@ struct ProjectExplorerView: View {
     private var settingsFooter: some View {
         HStack {
             Spacer()
-            Button(action: { openSettings() }) {
+            Button(action: { openWindow(id: "settings") }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 14))
                     .foregroundStyle(AppColors.toolbarIcon)
             }
             .buttonStyle(.plain)
             .help(L10n.sidebar.settings)
+            .accessibilityLabel(L10n.sidebar.settings)
             .padding(8)
         }
     }

@@ -9,7 +9,7 @@ struct ProjectSearchHit: Identifiable, Sendable {
 
 struct ProjectSearchView: View {
     let projectURL: URL?
-    @State var query: String
+    @Binding var query: String
     @Environment(\.dismiss) private var dismiss
     @State private var results: [ProjectSearchHit] = []
     @State private var searching = false
@@ -41,8 +41,10 @@ struct ProjectSearchView: View {
             searching = true
             let query = query
             EditorTabManager.shared.flushEditor()
-            let cached = Dictionary(uniqueKeysWithValues: EditorTabManager.shared.tabs.compactMap { tab in
-                EditorTabManager.shared.getCachedContent(for: tab.url).map { (tab.url, $0) }
+            let cached = Dictionary(uniqueKeysWithValues: EditorTabManager.shared.tabs.compactMap { tab -> (URL, String)? in
+                // Restored clean tabs may only contain a cursor placeholder, not loaded text.
+                guard EditorTabManager.shared.isModified(url: tab.url) else { return nil }
+                return EditorTabManager.shared.getCachedContent(for: tab.url).map { (tab.url, $0) }
             })
             let job = Task.detached(priority: .userInitiated) {
                 var hits: [ProjectSearchHit] = []

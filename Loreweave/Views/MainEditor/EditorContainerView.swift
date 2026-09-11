@@ -50,6 +50,9 @@ struct EditorContainerView: View {
 
     // 외부 파일 변경 감시
     @State private var fileWatchTimer: Timer?
+    @State private var observedDiskURL: URL?
+    @State private var observedDiskDate: Date?
+    @State private var observedDiskSize: Int?
 
     private var currentFileExists: Bool {
         tabManager.selectedTab?.fileExists ?? true
@@ -60,9 +63,6 @@ struct EditorContainerView: View {
             if tabManager.isEmpty {
                 emptyStateView
             } else {
-                // 탭바
-                TabBarView()
-
                 // 툴바
                 EditorToolbarView(
                     fontSize: $fontSize,
@@ -493,8 +493,17 @@ struct EditorContainerView: View {
     /// 현재 열린 파일의 외부 변경 확인
     private func checkForExternalFileChanges() {
         guard let url = currentFileURL, loadError == nil,
-              let base = tabManager.getEditState(for: url)?.originalContent,
-              let newContent = try? String(contentsOf: url, encoding: .utf8), newContent != base else { return }
+              let attributes = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return }
+        // Poll metadata, not megabytes of unchanged manuscript on the main thread.
+        // Saving still compares the complete disk revision under file coordination.
+        if observedDiskURL == url, let date = attributes.contentModificationDate,
+           date == observedDiskDate, let size = attributes.fileSize, size == observedDiskSize { return }
+        guard let base = tabManager.getEditState(for: url)?.originalContent,
+              let newContent = try? String(contentsOf: url, encoding: .utf8) else { return }
+        observedDiskURL = url
+        observedDiskDate = attributes.contentModificationDate
+        observedDiskSize = attributes.fileSize
+        guard newContent != base else { return }
         // Commit IME only when there is a competing disk revision, not on every timer tick.
         tabManager.flushEditor()
         guard currentFileURL == url else { return }

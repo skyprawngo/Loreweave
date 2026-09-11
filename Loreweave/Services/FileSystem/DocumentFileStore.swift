@@ -24,11 +24,41 @@ enum DocumentFileStore {
                 let data = try Data(contentsOf: target)
                 guard let disk = String(data: data, encoding: .utf8) else { throw Failure.unreadable }
                 guard disk == expected || disk == content else { throw Failure.conflict }
-                try Data(content.utf8).write(to: target, options: .atomic)
+                if disk != content { try writeAtomically(content, to: target) }
             } catch { writeError = error }
         }
         if let error = coordinationError { throw error }
         if let error = writeError { throw error }
+    }
+
+    /// Stream UTF-8 into a same-volume replacement, then publish only the complete file.
+    /// Never patch the live manuscript in place: a failed write must leave the base intact.
+    private static func writeAtomically(_ content: String, to target: URL) throws {
+        let manager = FileManager.default
+        let directory = try manager.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                        appropriateFor: target, create: true)
+        defer { try? manager.removeItem(at: directory) }
+        let temporary = directory.appendingPathComponent(target.lastPathComponent)
+        guard manager.createFile(atPath: temporary.path, contents: nil) else { throw Failure.unreadable }
+        let handle = try FileHandle(forWritingTo: temporary)
+        do {
+            var buffer = Data()
+            buffer.reserveCapacity(64 * 1024)
+            for byte in content.utf8 {
+                buffer.append(byte)
+                if buffer.count == 64 * 1024 {
+                    try handle.write(contentsOf: buffer)
+                    buffer.removeAll(keepingCapacity: true)
+                }
+            }
+            if !buffer.isEmpty { try handle.write(contentsOf: buffer) }
+            try handle.synchronize()
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+        _ = try manager.replaceItemAt(target, withItemAt: temporary)
     }
 
     static func contains(_ url: URL, in directory: URL) -> Bool {

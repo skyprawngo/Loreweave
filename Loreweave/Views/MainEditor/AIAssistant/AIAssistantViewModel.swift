@@ -7,6 +7,7 @@ struct AIDocumentSnapshot {
 
 @MainActor @Observable
 final class AIAssistantViewModel {
+    let chatGPTAccount = ChatGPTAccountService()
     var connectionState: AIConnectionState = .inactive
     var selectedCLIType: AICLIType?
     var installStatus: CLIInstallationStatus = .unknown
@@ -81,6 +82,7 @@ final class AIAssistantViewModel {
     }
 
     func confirmAISelection(_ type: AICLIType) {
+        UserSettings.shared.aiAssistantCLIType = type.rawValue
         selectedCLIType = type
         checkCLIInstallation(type)
     }
@@ -93,7 +95,14 @@ final class AIAssistantViewModel {
             let status = await CLIDetector.shared.checkInstallation(for: type)
             guard !Task.isCancelled, let self else { return }
             installStatus = status
-            if case .installed = status { completeConnection(type) }
+            if case .installed = status {
+                if type == .chatgpt {
+                    await chatGPTAccount.refresh()
+                    guard !Task.isCancelled else { return }
+                    if chatGPTAccount.account != nil { completeConnection(type) }
+                    else { connectionState = .ready(type) }
+                } else { completeConnection(type) }
+            }
             else { connectionState = .cliNotInstalled(type) }
         }
     }
@@ -108,10 +117,11 @@ final class AIAssistantViewModel {
         if let url = projectFolderURL { loadHistory(type, url: url) }
     }
 
-    func changeAI() { cancelSend(); connectionState = .selectingAI }
+    func changeAI() { cancelSend(); chatGPTAccount.cancelLogin(); connectionState = .selectingAI }
     func disconnect() {
         cancelSend()
         setupTask?.cancel()
+        chatGPTAccount.cancelLogin()
         UserSettings.shared.aiAssistantEnabled = false
         UserSettings.shared.aiAssistantCLIType = ""
         connectionState = .inactive
@@ -127,7 +137,7 @@ final class AIAssistantViewModel {
             installStatus = .installationFailed(L10n.get("ai.error.invalidExecutable"))
             return
         }
-        if UserSettings.shared.setAICLIPath(url) { completeConnection(type) }
+        if UserSettings.shared.setAICLIPath(url) { checkCLIInstallation(type) }
     }
 
     /// Both preview and send use the flushed editor cache, including unsaved changes.
@@ -141,6 +151,7 @@ final class AIAssistantViewModel {
     func sendMessage(continueFromCardId: UUID? = nil) {
         guard !isProcessing, !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               case .connected(let type) = connectionState else { return }
+        if type == .chatgpt && chatGPTAccount.account == nil { connectionState = .ready(type); return }
         guard let projectURL = projectFolderURL else { errorMessage = L10n.get("ai.error.noProject"); return }
         guard !UserSettings.shared.aiTerminalMode else {
             errorMessage = CLIProcessManager.CLIError.terminalUnavailable.localizedDescription
@@ -153,7 +164,8 @@ final class AIAssistantViewModel {
         let conversationId = continueFromCardId ?? userId
         let assistantId = UUID()
         let originalInput = inputText
-        let existingSession = cardSessionIds[conversationId]
+        // Subscription accounts use the app-visible history, including after migration or account changes.
+        let existingSession = type == .chatgpt ? nil : cardSessionIds[conversationId]
         var context: [(question: String, answer: String)] = []
         var question: AIMessage?
         for message in messages {

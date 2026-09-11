@@ -44,6 +44,8 @@ struct LoreweaveApp: App {
                     .environmentObject(appCommands)
                     .background(WindowAccessor { window in
                         window.titlebarAppearsTransparent = true
+                        window.titleVisibility = .hidden
+                        window.titlebarSeparatorStyle = .none
                     })
             }
         }

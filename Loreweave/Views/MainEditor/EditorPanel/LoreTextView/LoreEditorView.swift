@@ -128,6 +128,10 @@ final class LoreEditorView: NSView {
         // Word Wrap 시 동적 높이 사용
         let textViewWidth = contentWidth - contentView.gutterView.gutterWidth - 8 // textLeftPadding
         let contentHeight: CGFloat
+        let previousWidth = contentView.textView.bounds.width - 8
+        let preservesAnchor = previousWidth > 0 && textViewWidth > 0 && abs(previousWidth - textViewWidth) > 0.5
+        let anchorLine = preservesAnchor ? textView.lineIndex(atY: clipView.bounds.minY, viewportWidth: previousWidth) : 0
+        let anchorOffset = preservesAnchor ? clipView.bounds.minY - textView.yPosition(for: anchorLine, viewportWidth: previousWidth) : 0
 
         if contentView.textView.wordWrapEnabled && textViewWidth > 0 {
             contentHeight = contentView.textView.totalContentHeight(viewportWidth: textViewWidth) + max(0, scrollView.bounds.height - lineHeight)
@@ -145,6 +149,11 @@ final class LoreEditorView: NSView {
         if contentView.frame != newFrame {
             contentView.frame = newFrame
             contentView.layoutSubviews()
+        }
+        if preservesAnchor {
+            let rowHeight = textView.rowHeight(for: anchorLine, viewportWidth: textViewWidth)
+            let target = textView.yPosition(for: anchorLine, viewportWidth: textViewWidth) + min(anchorOffset, max(0, rowHeight - 1))
+            scrollTo(offsetY: target)
         }
     }
 
@@ -369,6 +378,10 @@ final class EditorContentView: NSView {
         // 클로저 내에서 현재 textView.bounds.width를 사용해야 창 크기 변경 시에도 올바르게 동작
         let defaultLineHeight = textView.lineHeight
         if textView.wordWrapEnabled {
+            gutterView.lineIndexProvider = { [weak self] y in
+                guard let self else { return 0 }
+                return self.textView.lineIndex(atY: y, viewportWidth: max(1, self.textView.bounds.width - 8))
+            }
             gutterView.rowHeightProvider = { [weak self] lineIndex in
                 guard let self = self else { return defaultLineHeight }
                 let viewportWidth = self.textView.bounds.width - 8 // textLeftPadding
@@ -382,6 +395,7 @@ final class EditorContentView: NSView {
                 return self.textView.yPosition(for: lineIndex, viewportWidth: viewportWidth)
             }
         } else {
+            gutterView.lineIndexProvider = nil
             gutterView.rowHeightProvider = nil
             gutterView.yPositionProvider = nil
         }

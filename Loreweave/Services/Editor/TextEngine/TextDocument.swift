@@ -45,6 +45,25 @@ final class TextDocument {
     /// 문서 수정 버전 (변경 감지용)
     private(set) var version: Int = 0
 
+    static let chunkSize = 256
+    private(set) var chunkVersions: [Int] = []
+    private var serializedChunks: [Int: String] = [:]
+    private var serializedText: String?
+
+    private func changed(from line: Int, through end: Int? = nil) {
+        version += 1
+        let count = (lines.count + Self.chunkSize - 1) / Self.chunkSize
+        if chunkVersions.count < count { chunkVersions += Array(repeating: version, count: count - chunkVersions.count) }
+        if chunkVersions.count > count { chunkVersions.removeLast(chunkVersions.count - count) }
+        let first = max(0, min(line / Self.chunkSize, count - 1))
+        let last = min(count - 1, (end ?? (lines.count - 1)) / Self.chunkSize)
+        if first <= last {
+            for chunk in first...last { chunkVersions[chunk] = version; serializedChunks[chunk] = nil }
+        }
+        serializedChunks = serializedChunks.filter { $0.key < count }
+        serializedText = nil
+    }
+
     /// 총 행 수
     var lineCount: Int { lines.count }
 
@@ -78,12 +97,23 @@ final class TextDocument {
         if lines.isEmpty {
             lines = [TextLine(content: "")]
         }
-        version += 1
+        changed(from: 0)
     }
 
     /// 전체 텍스트 추출
     func getText() -> String {
-        lines.map { $0.content }.joined(separator: "\n")
+        if let serializedText { return serializedText }
+        var chunks: [String] = []
+        for chunk in 0..<((lines.count + Self.chunkSize - 1) / Self.chunkSize) {
+            if serializedChunks[chunk] == nil {
+                let start = chunk * Self.chunkSize
+                serializedChunks[chunk] = lines[start..<min(lines.count, start + Self.chunkSize)].map { $0.content }.joined(separator: "\n")
+            }
+            chunks.append(serializedChunks[chunk]!)
+        }
+        let value = chunks.joined(separator: "\n")
+        serializedText = value
+        return value
     }
 
     // MARK: - Line Access
@@ -192,7 +222,7 @@ final class TextDocument {
             lines.insert(contentsOf: newLines, at: lineIndex + 1)
         }
 
-        version += 1
+        changed(from: lineIndex, through: insertedLines.count == 1 ? lineIndex : nil)
     }
 
     /// 범위 삭제
@@ -235,7 +265,7 @@ final class TextDocument {
             lines.removeSubrange((startLine + 1)...endLine)
         }
 
-        version += 1
+        changed(from: startLine, through: startLine == endLine ? startLine : nil)
     }
 
     /// 특정 범위 텍스트 대체
@@ -248,7 +278,7 @@ final class TextDocument {
     func insertLine(_ content: String, at index: Int) {
         let safeIndex = max(0, min(index, lines.count))
         lines.insert(TextLine(content: content), at: safeIndex)
-        version += 1
+        changed(from: safeIndex)
     }
 
     /// 행 삭제
@@ -258,7 +288,7 @@ final class TextDocument {
         if lines.isEmpty {
             lines = [TextLine(content: "")]
         }
-        version += 1
+        changed(from: index)
     }
 
     /// 행 교환 (두 행의 위치를 바꿈)
@@ -270,7 +300,7 @@ final class TextDocument {
         lines.swapAt(index1, index2)
         lines[index1].invalidateCache()
         lines[index2].invalidateCache()
-        version += 1
+        changed(from: min(index1, index2), through: max(index1, index2))
     }
 
     /// 행 복제 (지정된 행을 복사하여 바로 아래에 삽입)
@@ -280,7 +310,7 @@ final class TextDocument {
         let originalContent = lines[index].content
         let newLine = TextLine(content: originalContent)
         lines.insert(newLine, at: index + 1)
-        version += 1
+        changed(from: index)
     }
 
     // MARK: - Cache Management

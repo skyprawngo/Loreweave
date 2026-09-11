@@ -152,54 +152,124 @@ final class LoreTextView: NSView {
         }
     }
 
-    /// 특정 행의 실제 높이 반환 (Word Wrap 포함)
-    func rowHeight(for lineIndex: Int, viewportWidth: CGFloat) -> CGFloat {
-        guard let line = editorState.document.getLineObject(lineIndex) else {
-            return lineRenderer.lineHeight
+    private struct LayoutChunk {
+        var version: Int
+        var origins: [CGFloat]
+    }
+    private var layoutVersion = -1
+    private var heightStyleKey = ""
+    private var layoutChunks: [LayoutChunk] = []
+    private var chunkOrigins: [CGFloat] = [0]
+    private struct LayoutSnapshot {
+        let version: Int
+        let chunks: [LayoutChunk]
+        let origins: [CGFloat]
+    }
+    private var recentLayouts: [String: LayoutSnapshot] = [:]
+    private var recentLayoutKeys: [String] = []
+    private var measurementStyle = ""
+    private var layoutWidth: CGFloat = 0
+    private(set) var layoutMeasurementCount = 0
+
+    // Exact heights are retained separately from the bounded Core Text drawing cache.
+    // A scroll never scans the document; edits remeasure only invalidated 256-line chunks.
+    private func ensureLineOrigins(viewportWidth: CGFloat) {
+        let document = editorState.document
+        let config = editorState.configuration
+        let style = "\(ObjectIdentifier(document)):\(viewportWidth):\(config.fontName):\(config.fontSize):\(config.lineHeightMultiple):\(config.letterSpacing):\(wordWrapEnabled)"
+        let metrics = "\(ObjectIdentifier(document)):\(config.fontName):\(config.fontSize):\(config.lineHeightMultiple):\(config.letterSpacing):\(wordWrapEnabled)"
+        var wideningChunks: [LayoutChunk]?
+        if style != heightStyleKey {
+            if metrics == measurementStyle, viewportWidth >= layoutWidth,
+               layoutVersion == document.version {
+                wideningChunks = layoutChunks
+            }
+            if !heightStyleKey.isEmpty {
+                recentLayouts[heightStyleKey] = LayoutSnapshot(version: layoutVersion, chunks: layoutChunks, origins: chunkOrigins)
+                recentLayoutKeys.removeAll { $0 == heightStyleKey }
+                recentLayoutKeys.append(heightStyleKey)
+                while recentLayoutKeys.count > 2 {
+                    recentLayouts.removeValue(forKey: recentLayoutKeys.removeFirst())
+                }
+            }
+            if let saved = recentLayouts[style] {
+                layoutChunks = saved.chunks
+                chunkOrigins = saved.origins
+                layoutVersion = saved.version
+            } else {
+                layoutChunks.removeAll()
+                layoutVersion = -1
+            }
+            heightStyleKey = style
+            measurementStyle = metrics
+            layoutWidth = viewportWidth
         }
-        if let cached = cachedLineHeights[line.id], cached.content == line.content,
-           heightStyleKey == "\(ObjectIdentifier(editorState.document)):\(viewportWidth):\(editorState.configuration.fontName):\(editorState.configuration.fontSize):\(editorState.configuration.lineHeightMultiple):\(editorState.configuration.letterSpacing):\(wordWrapEnabled)" {
-            return cached.height
+        guard layoutVersion != document.version else { return }
+        let count = (document.lineCount + TextDocument.chunkSize - 1) / TextDocument.chunkSize
+        if layoutChunks.count > count { layoutChunks.removeLast(layoutChunks.count - count) }
+        chunkOrigins = [0]
+        for chunk in 0..<count {
+            let version = document.chunkVersions.indices.contains(chunk) ? document.chunkVersions[chunk] : document.version
+            if chunk >= layoutChunks.count || layoutChunks[chunk].version != version {
+                let start = chunk * TextDocument.chunkSize
+                var origins: [CGFloat] = [0]
+                for index in start..<min(document.lineCount, start + TextDocument.chunkSize) {
+                    let local = index - start
+                    let previous = wideningChunks.flatMap { chunks -> CGFloat? in
+                        guard chunks.indices.contains(chunk), chunks[chunk].origins.indices.contains(local + 1) else { return nil }
+                        return chunks[chunk].origins[local + 1] - chunks[chunk].origins[local]
+                    }
+                    // A line that fits the narrower width still fits a wider one exactly.
+                    let height: CGFloat
+                    if previous == lineRenderer.lineHeight {
+                        height = lineRenderer.lineHeight
+                    } else {
+                        layoutMeasurementCount += 1
+                        height = lineRenderer.calculateHeight(for: document.getLineObject(index)!, viewportWidth: viewportWidth)
+                    }
+                    origins.append(origins.last! + height)
+                }
+                let value = LayoutChunk(version: version, origins: origins)
+                if chunk < layoutChunks.count { layoutChunks[chunk] = value } else { layoutChunks.append(value) }
+            }
+            chunkOrigins.append(chunkOrigins.last! + layoutChunks[chunk].origins.last!)
         }
-        return lineRenderer.calculateHeight(for: line, viewportWidth: viewportWidth)
+        layoutVersion = document.version
     }
 
-    private var layoutKey: String = ""
-    private var lineOrigins: [CGFloat] = [0]
-    private var heightStyleKey = ""
-    private var cachedLineHeights: [UUID: (content: String, height: CGFloat)] = [:]
-
-    private func ensureLineOrigins(viewportWidth: CGFloat) {
-        let config = editorState.configuration
-        let key = "\(ObjectIdentifier(editorState.document)):\(editorState.document.version):\(viewportWidth):\(config.fontName):\(config.fontSize):\(config.lineHeightMultiple):\(config.letterSpacing):\(wordWrapEnabled)"
-        guard key != layoutKey else { return }
-        layoutKey = key
-        let style = "\(ObjectIdentifier(editorState.document)):\(viewportWidth):\(config.fontName):\(config.fontSize):\(config.lineHeightMultiple):\(config.letterSpacing):\(wordWrapEnabled)"
-        if style != heightStyleKey { cachedLineHeights.removeAll(); heightStyleKey = style }
-        lineOrigins = [0]
-        var liveIDs = Set<UUID>()
-        for index in 0..<editorState.document.lineCount {
-            guard let line = editorState.document.getLineObject(index) else { continue }
-            liveIDs.insert(line.id)
-            let height: CGFloat
-            if let cached = cachedLineHeights[line.id], cached.content == line.content { height = cached.height }
-            else {
-                height = rowHeight(for: index, viewportWidth: viewportWidth)
-                cachedLineHeights[line.id] = (line.content, height)
-            }
-            lineOrigins.append(lineOrigins.last! + height)
-        }
-        cachedLineHeights = cachedLineHeights.filter { liveIDs.contains($0.key) }
+    func rowHeight(for lineIndex: Int, viewportWidth: CGFloat) -> CGFloat {
+        ensureLineOrigins(viewportWidth: viewportWidth)
+        let line = max(0, min(lineIndex, editorState.document.lineCount - 1))
+        let origins = layoutChunks[line / TextDocument.chunkSize].origins
+        let local = line % TextDocument.chunkSize
+        return origins[local + 1] - origins[local]
     }
 
     func yPosition(for lineIndex: Int, viewportWidth: CGFloat) -> CGFloat {
         ensureLineOrigins(viewportWidth: viewportWidth)
-        return lineOrigins[max(0, min(lineIndex, lineOrigins.count - 1))]
+        if lineIndex >= editorState.document.lineCount { return chunkOrigins.last ?? 0 }
+        let line = max(0, lineIndex)
+        return chunkOrigins[line / TextDocument.chunkSize] + layoutChunks[line / TextDocument.chunkSize].origins[line % TextDocument.chunkSize]
+    }
+
+    func lineIndex(atY y: CGFloat, viewportWidth: CGFloat) -> Int {
+        ensureLineOrigins(viewportWidth: viewportWidth)
+        func containing(_ origins: [CGFloat], _ offset: CGFloat) -> Int {
+            var low = 0, high = origins.count - 1
+            while low < high {
+                let mid = (low + high + 1) / 2
+                if origins[mid] <= offset { low = mid } else { high = mid - 1 }
+            }
+            return min(low, origins.count - 2)
+        }
+        let chunk = containing(chunkOrigins, max(0, y))
+        let local = containing(layoutChunks[chunk].origins, max(0, y) - chunkOrigins[chunk])
+        return chunk * TextDocument.chunkSize + local
     }
 
     func totalContentHeight(viewportWidth: CGFloat) -> CGFloat {
         ensureLineOrigins(viewportWidth: viewportWidth)
-        return lineOrigins.last ?? lineRenderer.lineHeight
+        return chunkOrigins.last ?? lineRenderer.lineHeight
     }
 
     var caretRect: CGRect {
@@ -320,39 +390,11 @@ final class LoreTextView: NSView {
 
     /// 동적 행 높이로 그리기 (Word Wrap 활성화)
     private func drawWithDynamicHeight(dirtyRect: NSRect, context: CGContext, document: TextDocument, selection: TextSelection, viewportWidth: CGFloat) {
-        // 각 행의 Y 위치와 높이를 계산하면서 dirtyRect 범위 내의 행만 렌더링
-        var currentY: CGFloat = 0
-        var startLine: Int?
-        var endLine: Int?
-
-        // 먼저 dirtyRect 범위에 해당하는 행 찾기
-        for lineIndex in 0..<document.lineCount {
-            let rowHeight = self.rowHeight(for: lineIndex, viewportWidth: viewportWidth)
-            let lineBottom = currentY + rowHeight
-
-            // dirtyRect와 겹치는지 확인
-            if lineBottom > dirtyRect.minY && currentY < dirtyRect.maxY {
-                if startLine == nil {
-                    startLine = lineIndex
-                }
-                endLine = lineIndex
-            }
-
-            // dirtyRect를 지나쳤으면 중단
-            if currentY > dirtyRect.maxY {
-                break
-            }
-
-            currentY = lineBottom
-        }
-
-        guard let start = startLine, let end = endLine else { return }
-
-        // 시작 행까지의 Y 위치 계산
-        var y: CGFloat = 0
-        for i in 0..<start {
-            y += rowHeight(for: i, viewportWidth: viewportWidth)
-        }
+        let visible = dirtyRect.intersection(visibleRect)
+        guard !visible.isEmpty else { return }
+        let start = lineIndex(atY: visible.minY, viewportWidth: viewportWidth)
+        let end = lineIndex(atY: visible.maxY, viewportWidth: viewportWidth)
+        var y = yPosition(for: start, viewportWidth: viewportWidth)
 
         // 현재 줄 하이라이트
         let currentLineIndex = selection.cursorLine
@@ -683,31 +725,13 @@ final class LoreTextView: NSView {
 
         // Word Wrap 활성화 시 동적 높이 기반 계산
         if wordWrapEnabled && viewportWidth > 0 {
-            var currentY: CGFloat = 0
-            for lineIndex in 0..<editorState.document.lineCount {
-                let rowHeight = self.rowHeight(for: lineIndex, viewportWidth: viewportWidth)
-                if point.y >= currentY && point.y < currentY + rowHeight {
-                    // 해당 행 내에서 클릭 위치 계산
-                    let lineContent = editorState.document.getLine(lineIndex) ?? ""
-                    let x = point.x - textLeftPadding
-
-                    // Word Wrap된 행에서 클릭한 줄 위치 계산
-                    let wrappedLineIndex = Int(floor((point.y - currentY) / lineRenderer.lineHeight))
-                    let column = characterIndexInWrappedLine(
-                        lineContent: lineContent,
-                        wrappedLineIndex: wrappedLineIndex,
-                        xPosition: x,
-                        viewportWidth: viewportWidth
-                    )
-
-                    return TextPosition(line: lineIndex, column: min(column, lineContent.count))
-                }
-                currentY += rowHeight
-            }
-            // 문서 끝을 넘어간 경우
-            let lastLine = max(0, editorState.document.lineCount - 1)
-            let lastLineLength = editorState.document.getLine(lastLine)?.count ?? 0
-            return TextPosition(line: lastLine, column: lastLineLength)
+            let index = lineIndex(atY: point.y, viewportWidth: viewportWidth)
+            let content = editorState.document.getLine(index) ?? ""
+            let origin = yPosition(for: index, viewportWidth: viewportWidth)
+            let row = Int(floor(max(0, point.y - origin) / lineRenderer.lineHeight))
+            let column = characterIndexInWrappedLine(lineContent: content, wrappedLineIndex: row,
+                xPosition: point.x - textLeftPadding, viewportWidth: viewportWidth)
+            return TextPosition(line: index, column: min(column, content.count))
         }
 
         // 고정 높이 (Word Wrap 비활성화)
@@ -869,6 +893,18 @@ final class LoreTextView: NSView {
         default: return false
         }
         return true
+    }
+
+    // Native Edit menu dispatches selectors before keyDown.
+    @objc func paste(_ sender: Any?) { commitMarkedTextIfNeeded(); performPaste() }
+    @objc func copy(_ sender: Any?) { commitMarkedTextIfNeeded(); performCopy() }
+    @objc func cut(_ sender: Any?) { commitMarkedTextIfNeeded(); performCut() }
+    override func selectAll(_ sender: Any?) {
+        commitMarkedTextIfNeeded()
+        editorState.selectAll()
+        updateSelectedRange()
+        needsDisplay = true
+        notifyCursorChange()
     }
 
     // MARK: - Clipboard Operations

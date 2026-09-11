@@ -111,6 +111,13 @@ forged.baseContent = "outside"
 try JSONEncoder().encode(EditorSessionState(tabs: [forged], selectedTabIndex: 0)).write(to: sessionFile)
 manager.restoreSession(from: project)
 expect(manager.tabs.isEmpty, "project metadata cannot inject external write targets")
+
+let largeURL = base.appendingPathComponent("large-utf8.md")
+let largeOriginal = String(repeating: "한😀e\u{301}\n", count: 30000)
+try DocumentFileStore.create(largeOriginal, at: largeURL)
+let largeChanged = largeOriginal + "final\n"
+try DocumentFileStore.save(largeChanged, at: largeURL, expected: largeOriginal)
+expect(try! String(contentsOf: largeURL, encoding: .utf8) == largeChanged, "streamed atomic save preserves UTF8 chunk boundaries")
 print("ALL STORAGE REGRESSIONS PASSED")
 '''
 with tempfile.TemporaryDirectory(prefix="loreweave-storage-tests-") as work:

@@ -458,6 +458,9 @@ final class EditorTabManager {
         if !saveTab(at: selectedTabIndex, content: content) { showSaveError(for: tab.url) }
     }
 
+    var canGoBack: Bool { navigation.indices.contains(navigationIndex - 1) }
+    var canGoForward: Bool { navigation.indices.contains(navigationIndex + 1) }
+
     func goBack() { navigate(to: navigationIndex - 1) }
     func goForward() { navigate(to: navigationIndex + 1) }
     private func navigate(to index: Int) {
@@ -530,6 +533,7 @@ final class EditorTabManager {
             if let i = findTab(with: target) {
                 editStates[target]?.markAsSaved()
                 tabs[i].isModified = false
+                saveErrors[target] = nil
                 lastSavedAt[target] = Date()
             }
             autoSaveSessionIfNeeded()
