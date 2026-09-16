@@ -1,6 +1,6 @@
-# Loreweave 작업 맥락
+# TextlinkEditor 작업 맥락
 
-Loreweave는 `.weaveproj` 폴더 안에 원고와 창작 자료를 저장하는 macOS 앱이다. SwiftUI 화면과 AppKit/Core Text 커스텀 에디터를 함께 사용한다. 앱 타깃의 최소 OS는 macOS 26.0이며, 실제 빌드 설정은 `Loreweave.xcodeproj/project.pbxproj`가 기준이다.
+TextlinkEditor는 `.weaveproj` 폴더 안에 원고와 창작 자료를 저장하는 macOS 앱이다. SwiftUI 화면과 AppKit 네이티브 원고 에디터를 사용한다. 이전 Core Text 엔진은 회귀 비교용으로 남아 있다. 앱 타깃의 최소 OS는 macOS 26.0이며, 실제 빌드 설정은 `TextlinkEditor.xcodeproj/project.pbxproj`가 기준이다.
 
 ## 기능별 진입점
 
@@ -8,13 +8,13 @@ Loreweave는 `.weaveproj` 폴더 안에 원고와 창작 자료를 저장하는 
 
 | 작업 | 진입점과 맥락 |
 |---|---|
-| 앱 시작·프로젝트 전환 | `Loreweave/LoreweaveApp.swift`, [Project](Loreweave/Services/Project/claude.md) |
-| 파일 탐색·이동·외부 변경 | [FileSystem](Loreweave/Services/FileSystem/claude.md) |
-| 탭·저장·원고 편집 | [Editor](Loreweave/Services/Editor/claude.md), [TextEngine](Loreweave/Services/Editor/TextEngine/claude.md) |
-| CLI 연결·AI 대화·문맥 | [AI](Loreweave/Services/AI/claude.md) |
-| 권한·설정·단축키·Undo | [Core](Loreweave/Services/Core/claude.md) |
-| 화면 구조·AppKit 연동 | [Views](Loreweave/Views/claude.md) |
-| 테마·번역 | [Theme](Loreweave/Theme/claude.md), [Localization](Loreweave/Localization/claude.md) |
+| 앱 시작·프로젝트 전환 | `TextlinkEditor/TextlinkEditorApp.swift`, [Project](TextlinkEditor/Services/Project/claude.md) |
+| 파일 탐색·이동·외부 변경 | [FileSystem](TextlinkEditor/Services/FileSystem/claude.md) |
+| 탭·저장·원고 편집 | [Editor](TextlinkEditor/Services/Editor/claude.md), [TextEngine](TextlinkEditor/Services/Editor/TextEngine/claude.md) |
+| CLI 연결·AI 대화·문맥 | [AI](TextlinkEditor/Services/AI/claude.md) |
+| 권한·설정·단축키·Undo | [Core](TextlinkEditor/Services/Core/claude.md) |
+| 화면 구조·AppKit 연동 | [Views](TextlinkEditor/Views/claude.md) |
+| 테마·번역 | [Theme](TextlinkEditor/Theme/claude.md), [Localization](TextlinkEditor/Localization/claude.md) |
 
 ## 변경 시 중요한 경계
 

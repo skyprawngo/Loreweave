@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 root = Path(__file__).resolve().parents[1]
-sizing = (root / 'Loreweave/Views/MainEditor/TabBarView.swift').read_text().split('enum TabBarSizing {', 1)[1]
+sizing = (root / 'TextlinkEditor/Views/MainEditor/TabBarView.swift').read_text().split('enum TabBarSizing {', 1)[1]
 harness = '''
 for available: CGFloat in [320, 480, 800] {
     var previous: CGFloat = .greatestFiniteMagnitude

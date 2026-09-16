@@ -6,9 +6,9 @@
 
 **브라우저 OAuth 로그인 → 앱 계정 표시 → 앱 종료·재실행 후 로그인 복원 → 실제 구독 AI 응답 → 사용량 조회까지 확인했다.**
 
-LoreWeave의 ChatGPT 선택 화면에 ‘ChatGPT로 로그인’을 추가했다. 버튼은 공식 Codex App Server의 `account/login/start`를 호출하고 OpenAI 인증 URL을 기본 브라우저에 연다. 로그인 완료 이벤트의 ID를 현재 로그인 요청과 비교하고 계정 정보를 다시 조회한 후 채팅을 활성화한다. 계정 팝오버에서 사용량 조회와 앱 계정 로그아웃을 제공한다.
+TextlinkEditor의 ChatGPT 선택 화면에 ‘ChatGPT로 로그인’을 추가했다. 버튼은 공식 Codex App Server의 `account/login/start`를 호출하고 OpenAI 인증 URL을 기본 브라우저에 연다. 로그인 완료 이벤트의 ID를 현재 로그인 요청과 비교하고 계정 정보를 다시 조회한 후 채팅을 활성화한다. 계정 팝오버에서 사용량 조회와 앱 계정 로그아웃을 제공한다.
 
-OAuth 발급·PKCE·callback 처리·토큰 갱신은 공식 Codex 실행 엔진이 담당한다. `cli_auth_credentials_store="keyring"`으로 macOS Keychain 저장을 요구하며, 키체인 실패 시 평문 저장으로 전환하지 않는다. LoreWeave 전용 `Application Support/Loreweave/OpenAI`를 사용하므로 다른 Codex 앱의 인증 파일을 가져오거나 덮어쓰지 않는다. 인증 정보를 프로젝트·UserDefaults·로그에 저장하지 않는다.
+OAuth 발급·PKCE·callback 처리·토큰 갱신은 공식 Codex 실행 엔진이 담당한다. `cli_auth_credentials_store="keyring"`으로 macOS Keychain 저장을 요구하며, 키체인 실패 시 평문 저장으로 전환하지 않는다. TextlinkEditor 전용 `Application Support/TextlinkEditor/OpenAI`를 사용하므로 다른 Codex 앱의 인증 파일을 가져오거나 덮어쓰지 않는다. 인증 정보를 프로젝트·UserDefaults·로그에 저장하지 않는다.
 
 AI 호출도 같은 저장소와 키체인 설정을 사용한다. 상속된 OpenAI API 키·Codex 인증 환경변수를 제거하고 ChatGPT 로그인과 OpenAI 제공자를 지정한다. 따라서 API 키 과금으로 조용히 전환하지 않는다. 구독에 따른 모델 접근·한도는 OpenAI 응답을 따르며, 고정된 월 토큰 수나 무제한 사용을 약속하지 않는다.
 
@@ -20,7 +20,7 @@ AI 호출도 같은 저장소와 키체인 설정을 사용한다. 상속된 Ope
 
 ## 실제 앱에서 확인한 것
 
-검증 프로젝트: `/Users/skyprawngo/Documents/LoreWeave-QA-20260912.weaveproj`. 실제 사용자 원고 대신 별도 합성 원고를 사용했다.
+검증 프로젝트: `/Users/skyprawngo/Documents/TextlinkEditor-QA-20260912.weaveproj`. 실제 사용자 원고 대신 별도 합성 원고를 사용했다.
 
 | 시나리오 | 관찰 결과 |
 |---|---|
@@ -35,7 +35,7 @@ AI 호출도 같은 저장소와 키체인 설정을 사용한다. 상속된 Ope
 | 10만 행 하단 | 약 280만 글자 원고에서 Cmd+↓로 100001행 끝까지 이동, 하단 렌더링·입력·저장 확인 |
 | OAuth 로그인 | 앱 버튼에서 웹 로그인 페이지 열림, 완료 후 계정/플랜 표시 |
 | OAuth 재사용 | 앱을 정상 종료·재실행해 추가 로그인 없이 계정 복원 |
-| 실제 AI 응답 | 앱 입력창에서 최소 테스트 요청 전송, ‘LoreWeave 연결 성공’ 답변 표시 |
+| 실제 AI 응답 | 앱 입력창에서 최소 테스트 요청 전송, ‘TextlinkEditor 연결 성공’ 답변 표시 |
 | 대화 이어하기 | 최종 빌드 재실행 후 이전 카드를 열어 직전 답변 반복 요청. 앱 대화 문맥을 통해 같은 답변 수신 |
 | 현재 파일 검색 | Cmd+F로 LOCAL-DRAFT 검색, 실제 3행 일치 문자열 선택 확인 |
 | 구독 사용량 | 계정 팝오버에서 실제 남은 한도 응답 표시. 인증 정보와 이메일은 이 보고서에 기록하지 않음 |

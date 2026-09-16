@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess,tempfile
 root=Path(__file__).resolve().parents[1]
-s=(root/'Loreweave/Views/MainEditor/AIAssistant/Chat/AIChatView.swift').read_text()
+s=(root/'TextlinkEditor/Views/MainEditor/AIAssistant/Chat/AIChatView.swift').read_text()
 s=s[s.index('struct MultiLineInputView:'):s.index('// MARK: - 대화 카드 뷰')]
 # NSViewRepresentable.Context has no public initializer. Replace only construction signature.
 s=s.replace('struct MultiLineInputView: NSViewRepresentable','struct MultiLineInputView').replace('context: Context','coordinator: Coordinator').replace('context.coordinator','coordinator')
@@ -39,7 +39,7 @@ harness='''
  }
 }
 '''
-with tempfile.TemporaryDirectory(prefix='loreweave-ai-input-') as d:
+with tempfile.TemporaryDirectory(prefix='textlinkeditor-ai-input-') as d:
  p=Path(d);(p/'Test.swift').write_text(prefix+s+harness)
  subprocess.run(['xcrun','swiftc','-parse-as-library',str(p/'Test.swift'),'-o',str(p/'test')],check=True)
  subprocess.run([str(p/'test')],check=True)

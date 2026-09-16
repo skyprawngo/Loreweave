@@ -1,4 +1,4 @@
-# Loreweave
+# TextlinkEditor
 
 공통 작업 맥락은 [AGENTS.md](AGENTS.md)에 있다. 먼저 그 진입점을 읽고, 작업과 관련된 하위 `claude.md`만 참조한다.
 

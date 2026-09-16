@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-source = (root / 'Loreweave/Services/Core/KeyboardShortcutManager.swift').read_text()
+source = (root / 'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text()
 start = source.index('    private var shortcutsFileURL: URL {')
 end = source.index('    private init()', start)
 source = source[:start] + '''    private var shortcutsFileURL: URL {

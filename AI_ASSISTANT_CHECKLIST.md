@@ -10,7 +10,7 @@
 - 문맥과 제공자 옵션: `Services/AI/Prompt/AIPromptTemplateManager.swift`, `Resources/AIPromptTemplates.json`.
 - 대화 저장: `Services/AI/Chat/ChatHistoryManager.swift`의 `ai-sessions/session-metadata.json`, `cards/{UUID}.json`. 구형 단일 기록 파일 읽기도 남아 있다.
 
-위 경로는 `Loreweave/` 기준이다. 저장·호출 경계는 [AI 서비스 맥락](Loreweave/Services/AI/claude.md)에 있다.
+위 경로는 `TextlinkEditor/` 기준이다. 저장·호출 경계는 [AI 서비스 맥락](TextlinkEditor/Services/AI/claude.md)에 있다.
 
 ## 실제 동작 확인이 필요한 항목
 

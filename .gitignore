@@ -1,3 +1,4 @@
 .DS_Store
-/Loreweave.xcodeproj
-/Loreweave.xcworkspace
+**/xcuserdata/
+*.xcuserstate
+/TextlinkEditor.xcworkspace

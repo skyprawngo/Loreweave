@@ -1,14 +1,14 @@
-# LoreWeave 경쟁 제품 비교와 제품 방향 검토
+# TextlinkEditor 경쟁 제품 비교와 제품 방향 검토
 
 확인일: **2026-09-11**. 비교 대상: Scrivener, Ulysses, iA Writer, Obsidian, Novelcrafter, Sudowrite.
 
 공식 제품 페이지·도움말·가격표를 직접 조회했다. “지원”은 공식 문서에 명시된 기능을 뜻하며, 이 조사에서 경쟁 앱을 설치하거나 한국어 원고를 입력해 검증하지는 않았다. 한국어 UI, 한글 입력 안정성, 한국어 교정·생성 품질은 서로 구분했다. 가격은 확인 당시 USD 표시이며 한국 결제 가격·세금·환율을 뜻하지 않는다. 웹페이지의 기능 설명과 실제 제품 전체의 동작이 일치하는지까지 실측한 보고서는 아니다.
 
-LoreWeave의 기준은 현재 작업 트리와 [앱 검토보고서](/Users/skyprawngo/Documents/Coding/Loreweave/APP_REVIEW_2026-09-11.md)다. 아래 개선·추가·숨김·삭제는 **경쟁 조사에 따른 토의 제안**이다. 병렬로 진행한 기존 결함 수정은 [구현 결과](/Users/skyprawngo/Documents/Coding/Loreweave/IMPLEMENTATION_2026-09-12.md)에 별도로 기록했다. 아래 현재 상태 비교는 수정 전 검토보고서를 기준으로 하며, 복구 초안·기본 검색·요청 소유권 등은 이번 수정에 포함됐다. 경쟁 조사만을 근거로 추가 기능을 구현하거나 삭제하지는 않았다.
+TextlinkEditor의 기준은 현재 작업 트리와 [앱 검토보고서](/Users/skyprawngo/Documents/Coding/Loreweave/APP_REVIEW_2026-09-11.md)다. 아래 개선·추가·숨김·삭제는 **경쟁 조사에 따른 토의 제안**이다. 병렬로 진행한 기존 결함 수정은 [구현 결과](/Users/skyprawngo/Documents/Coding/Loreweave/IMPLEMENTATION_2026-09-12.md)에 별도로 기록했다. 아래 현재 상태 비교는 수정 전 검토보고서를 기준으로 하며, 복구 초안·기본 검색·요청 소유권 등은 이번 수정에 포함됐다. 경쟁 조사만을 근거로 추가 기능을 구현하거나 삭제하지는 않았다.
 
 ## 권장 방향
 
-LoreWeave는 **한국어 장편 원고를 로컬에 보관하면서, 필요한 자료만 AI와 함께 검토하고 수정 결과를 선택해 반영하는 macOS 집필 도구**에 집중하는 편을 권한다.
+TextlinkEditor는 **한국어 장편 원고를 로컬에 보관하면서, 필요한 자료만 AI와 함께 검토하고 수정 결과를 선택해 반영하는 macOS 집필 도구**에 집중하는 편을 권한다.
 
 경쟁 제품에는 이미 정리·집필·내보내기 또는 소설 문맥 관리의 강한 사례가 있다. 따라서 기능 수를 따라잡기보다 다음 사용자 경험을 하나의 완성된 흐름으로 만드는 것이 중요하다.
 
@@ -29,7 +29,7 @@ LoreWeave는 **한국어 장편 원고를 로컬에 보관하면서, 필요한 �
 | **Novelcrafter** | 브라우저 기반. 장면·Codex·시리즈·채팅을 연결 | 공식 FAQ는 현재 인터넷 연결 필요, 오프라인은 미완료라고 명시. 이는 로컬 모델 연결 여부와 별개 | 장면·요약·Codex·프롬프트 등의 Revision History 복원 지원. [오프라인 FAQ](https://www.novelcrafter.com/help/faq/general/can-i-use-nc-in-ofline-mode), [버전 기록](https://docs.novelcrafter.com/en/articles/8677729-revision-history/) |
 | **Sudowrite** | 웹 중심 AI 집필 UI, 문서와 Story Bible·생성 카드 결합 | 이 조사에서는 로컬 파일을 원본으로 직접 열어 편집하는 오프라인 동작을 확인하지 못함 | AI 결과 History 카드와 Synopsis의 이전 버전 접근 확인. **이를 전체 원고의 장기 복구 정책과 동일시하지 않음**. [인터페이스](https://docs.sudowrite.com/getting-started/dQph1snuwbfMWG9wRjsNug/interface/ubBg2ZEoAwasV98E3ZBwjn), [Synopsis](https://docs.sudowrite.com/using-sudowrite/1ow1qkGqof9rtcyGnrWUBS/synopsis/r4GGUdR23VKcK2WrQVdheb) |
 
-LoreWeave는 로컬 원고를 직접 다루는 장점을 이미 갖지만, 현재 탭 닫기·종료 실패·동명 생성·파일 이동·외부 충돌 문제가 이 장점을 약화시킨다. 경쟁 제품의 복구 기능을 보기 전에 앱 검토보고서 R01–R05부터 해결해야 한다. 자동저장이 있다고 복구가 되는 것은 아니다. 특히 잘못 덮어쓴 내용까지 자동저장하면 되돌릴 별도 버전이 필요하다.
+TextlinkEditor는 로컬 원고를 직접 다루는 장점을 이미 갖지만, 현재 탭 닫기·종료 실패·동명 생성·파일 이동·외부 충돌 문제가 이 장점을 약화시킨다. 경쟁 제품의 복구 기능을 보기 전에 앱 검토보고서 R01–R05부터 해결해야 한다. 자동저장이 있다고 복구가 되는 것은 아니다. 특히 잘못 덮어쓴 내용까지 자동저장하면 되돌릴 별도 버전이 필요하다.
 
 ### AI 참조와 출력
 
@@ -37,12 +37,12 @@ LoreWeave는 로컬 원고를 직접 다루는 장점을 이미 갖지만, 현�
 |---|---|---|
 | **Scrivener** | 연구 자료와 원고를 정리하고 여러 문서를 참조하는 집필 공간. 이번 공식 자료에서 통합 생성 AI는 확인하지 못했으므로 AI 기능 수를 경쟁 기준으로 삼지 않음 | Compile로 Word·PDF·평문 등의 원고 출력. 장별 편집과 최종 결과물 조립을 분리. [개요](https://www.literatureandlatte.com/scrivener/overview), [기능 소개](https://www.literatureandlatte.com/introducing-scrivener-3) |
 | **Ulysses** | 문서 관리·집중 화면·교정의 결합. 확인한 Grammar/Style Check를 소설 설정집 기반 생성 AI로 분류하지 않음 | 여러 시트/그룹을 DOCX·PDF·ePub·HTML·텍스트로 출력, 미리보기·스타일과 자료 시트 제외 지원. [출력](https://help.ulysses.app/export?kb_language=en_US), [교정](https://help.ulysses.app/grammar-and-style-check) |
-| **iA Writer** | Authorship으로 본인·AI·외부 참고문을 구별. **작성자가 지정하는 출처 표시이며 AI 탐지기가 아님**. 외부 수정문을 붙일 때 변경 부분을 구별하는 방향이 LoreWeave에 유용 | Markdown·HTML·PDF·Word 출력 시 저자 메타데이터 제거. 원본 파일 공유와 제출본 출력을 구분. [Mac Authorship](https://ia.net/writer/support/editor/authorship?tab=authorship-mac), [수정문 붙이기](https://ia.net/writer/how-to/track-authors-and-ai) |
+| **iA Writer** | Authorship으로 본인·AI·외부 참고문을 구별. **작성자가 지정하는 출처 표시이며 AI 탐지기가 아님**. 외부 수정문을 붙일 때 변경 부분을 구별하는 방향이 TextlinkEditor에 유용 | Markdown·HTML·PDF·Word 출력 시 저자 메타데이터 제거. 원본 파일 공유와 제출본 출력을 구분. [Mac Authorship](https://ia.net/writer/support/editor/authorship?tab=authorship-mac), [수정문 붙이기](https://ia.net/writer/how-to/track-authors-and-ai) |
 | **Obsidian** | 링크·백링크·그래프·Canvas가 강점. 특정 AI 플러그인의 기능을 기본 앱 기능으로 계산하지 않음 | 기본 원고가 Markdown이므로 파일 자체의 이동성이 높음. 이번 조사에서 출판용 다중 장 조립·DOCX 출력은 기본 기능으로 확인하지 못함. [제품](https://obsidian.md/), [Markdown](https://obsidian.md/help/import/markdown) |
 | **Novelcrafter** | Codex에서 인물·장소·설정과 시리즈 공유, Progressions로 시점별 상태를 관리. BYOK 제공자 또는 로컬 모델 연결. 일부 가격표 기능은 planned이므로 완료 기능에 포함하지 않음 | 원고 외 Codex·채팅 등을 함께 내보내는 기능이 공식 변경 기록에 있음. 출판용 최종 조판은 외부 프로그램 사용 안내. [Codex](https://www.novelcrafter.com/features/codex), [전체 프로젝트 출력](https://feedback.novelcrafter.com/changelog/september-19-2024), [조판 범위](https://www.novelcrafter.com/help/faq/export/format-for-export) |
 | **Sudowrite** | Story Bible이 개요·인물·세계관·장면 생성의 참조 자료. Rewrite 결과의 변경 표시와 실제 참조 문맥 표시가 중요 | 개별 DOCX, 프로젝트 ZIP, **전체 원고를 한 DOCX로 병합** 지원. 프로젝트 출력에는 **Story Bible이 포함되지 않음**. [Story Bible](https://docs.sudowrite.com/using-sudowrite/1ow1qkGqof9rtcyGnrWUBS/what-is-story-bible/jmWepHcQdJetNrE991fjJC), [Rewrite](https://docs.sudowrite.com/using-sudowrite/1ow1qkGqof9rtcyGnrWUBS/rewrite/9hkeezeUsCiUCG4dRdEqjS), [출력](https://docs.sudowrite.com/using-sudowrite/1ow1qkGqof9rtcyGnrWUBS/exporting-files/3NtVWXcnwYaRCmPW2iwcCB) |
 
-**비교 해석:** LoreWeave의 AI 카드는 출발점이다. 경쟁력을 만드는 것은 카드 자체보다 “어떤 원고와 설정을 읽었는지”, “무슨 문장을 바꿨는지”, “원래 문장으로 돌아갈 수 있는지”의 연결이다. 출력도 원고 제출본과 전체 프로젝트 보관본을 따로 제공해야 한다. 세계관과 AI 기록이 빠진 원고 DOCX를 “전체 백업”이라 부르면 안 된다.
+**비교 해석:** TextlinkEditor의 AI 카드는 출발점이다. 경쟁력을 만드는 것은 카드 자체보다 “어떤 원고와 설정을 읽었는지”, “무슨 문장을 바꿨는지”, “원래 문장으로 돌아갈 수 있는지”의 연결이다. 출력도 원고 제출본과 전체 프로젝트 보관본을 따로 제공해야 한다. 세계관과 AI 기록이 빠진 원고 DOCX를 “전체 백업”이라 부르면 안 된다.
 
 ### 한국어 지원에서 구분해야 할 것
 
@@ -55,7 +55,7 @@ LoreWeave는 로컬 원고를 직접 다루는 장점을 이미 갖지만, 현�
 | Novelcrafter | 사용 모델이 지원하는 LTR 언어의 생성 가능이라는 안내 | 한국어 소설 품질은 모델·프롬프트에 좌우되며 공식 안내가 문학 품질을 보장하지 않음. [언어 안내](https://www.novelcrafter.com/help/faq/general/language-compatibility) |
 | Sudowrite | 거의 모든 언어로 쓰면 언어를 맞춰 제안하나 다른 기능에서 영어로 돌아갈 수 있다는 안내 | 한국어 고유 문체·높임말·시점·인물 말투 유지 품질 미실측. [언어 FAQ 포함 가격 페이지](https://sudowrite.com/pricing) |
 
-따라서 “해외 앱은 한국어가 안 된다”는 포지셔닝은 근거가 부족하다. LoreWeave는 **한글 IME와 Unicode 경계를 실제로 검증하고, 공백 포함/제외 글자 수·한국어 대사 검토·회차 제출 흐름을 명확히 제공**하는 것으로 차이를 만들어야 한다. 현재 LoreWeave의 한/영/일 번역 파일 존재도 이 검증을 대체하지 못한다.
+따라서 “해외 앱은 한국어가 안 된다”는 포지셔닝은 근거가 부족하다. TextlinkEditor는 **한글 IME와 Unicode 경계를 실제로 검증하고, 공백 포함/제외 글자 수·한국어 대사 검토·회차 제출 흐름을 명확히 제공**하는 것으로 차이를 만들어야 한다. 현재 TextlinkEditor의 한/영/일 번역 파일 존재도 이 검증을 대체하지 못한다.
 
 ### 비용 구조
 
@@ -68,9 +68,9 @@ LoreWeave는 로컬 원고를 직접 다루는 장점을 이미 갖지만, 현�
 | Novelcrafter | 월 결제 Scribe **$4**, Hobbyist **$8**, Artisan **$14**, Specialist **$20**. AI는 BYOK 구조 | 앱 구독과 연결한 모델 제공자의 비용을 구분. 로컬 모델은 장비·자원 부담이 있음. 오래된 도움말의 모델별 예시 단가는 재사용하지 않음. [가격](https://www.novelcrafter.com/pricing), [AI 비용 구조](https://www.novelcrafter.com/help/faq/ai-and-prompting/ai-cost) |
 | Sudowrite | 월/연 구독과 AI 크레딧 포함형 등급 | 동적 페이지에서 월/연 표시와 프로모션 크레딧이 함께 추출되어 확정 결제 총액은 채택하지 않음. 크레딧을 글자 수·토큰 수와 동일시하지 않음. [가격](https://sudowrite.com/pricing) |
 
-LoreWeave 요금제는 아직 정할 단계가 아니다. 다만 설정 UI에서 **앱 가격, 외부 AI 인증 방식, 실제 청구 주체**를 혼동시키지 않아야 한다. 현재 CLI 방식을 유지할지 API 연결을 추가할지는 제품 결정이며, 다른 앱의 BYOK 정책을 그대로 LoreWeave의 CLI에 적용해서 “API 결제가 반드시 추가된다”거나 “보유 구독으로 모든 호출이 된다”고 단정할 수 없다. 구체 제공자·실행 방식이 정해지면 해당 제공자의 당시 공식 계약을 별도로 확인해야 한다.
+TextlinkEditor 요금제는 아직 정할 단계가 아니다. 다만 설정 UI에서 **앱 가격, 외부 AI 인증 방식, 실제 청구 주체**를 혼동시키지 않아야 한다. 현재 CLI 방식을 유지할지 API 연결을 추가할지는 제품 결정이며, 다른 앱의 BYOK 정책을 그대로 TextlinkEditor의 CLI에 적용해서 “API 결제가 반드시 추가된다”거나 “보유 구독으로 모든 호출이 된다”고 단정할 수 없다. 구체 제공자·실행 방식이 정해지면 해당 제공자의 당시 공식 계약을 별도로 확인해야 한다.
 
-## 2. 현재 LoreWeave에 연결한 개선안
+## 2. 현재 TextlinkEditor에 연결한 개선안
 
 우선순위는 매출·사용빈도 측정 결과가 아니라 원고 보존 위험, 완성된 집필 흐름, 구현 의존성을 근거로 한 판단이다. P1은 먼저 해결할 신뢰성, P2는 첫 제품의 핵심 가치, P3는 검증 후 확장이다.
 
@@ -78,7 +78,7 @@ LoreWeave 요금제는 아직 정할 단계가 아니다. 다만 설정 UI에서
 |---|---|---|---|
 | **P1 보완: 저장·닫기·충돌 처리** | 앱 보고서 R01–R05, EditorTabManager·FileSystemManager·앱 종료 | 저장 실패 시 닫기 중단, 동명 생성 거부, 이동 후 URL 일치, 외부 수정 시 두 버전 보존 | 모든 비교 제품의 집필 기능을 사용하기 위한 전제. 신규 기능보다 먼저 해야 하며 실패 시나리오 검증 비용이 듦 |
 | **P1 추가: 복구 초안과 버전 탐색** | URL별 편집 캐시는 있으나 세션 파일에 미저장 본문이 없음 | 비정상 종료 후 복구, 변경 전 스냅숏, 날짜별 미리보기·다른 파일로 복구 | Scrivener/Ulysses/Obsidian에서 배울 공통 기준. 저장 공간·보존 기간·파일 이동에 따른 ID 유지 설계 필요 |
-| **P1 보완: 문서별 Undo·한글 입력** | R06/R09, EditorState·LoreEditorRepresentable | A→B→A에도 Undo 유지, 한글 조합·이모지·결합 문자 위치 정확 | 한국어 중심 앱의 실질 차별화 전제. 커스텀 엔진 유지에는 지속적 AppKit/IME 검증 부담이 따름 |
+| **P1 보완: 문서별 Undo·한글 입력** | R06/R09, EditorState·TextlinkEditorRepresentable | A→B→A에도 Undo 유지, 한글 조합·이모지·결합 문자 위치 정확 | 한국어 중심 앱의 실질 차별화 전제. 커스텀 엔진 유지에는 지속적 AppKit/IME 검증 부담이 따름 |
 | **P1 보완: AI 요청 소유권·취소·실패** | R07/R08/R12, CLIProcessManager·AIAssistantViewModel | 프로젝트/카드별 요청 고정, 취소 후 늦은 출력 차단, UTF-8 청크 보존, 오류 별도 표시 | 더 많은 모델을 추가하기 전에 대화 기록과 원고의 귀속을 보장. 가짜 CLI로 실패를 재현할 기반 필요 |
 | **P2 보완: 검색·기본 명령** | R10/R11, MainEditorView·SpotlightView·AppCommands | 현재 파일 찾기/바꾸기, 다음으로 프로젝트 본문 검색, 실제 사용자 단축키 반영 | 장편에서 이름·사건을 찾는 기본기. 검색 결과 인덱스와 미저장 원고 반영이 필요 |
 | **P2 추가: 제출본 출력** | 현재 명령과 파일 저장 흐름; 별도 출력 기능 필요 | 장면 순서 선택 → 자료 제외 → 한 파일 TXT/Markdown/DOCX → 미리보기 | Scrivener/Ulysses/Sudowrite 공통의 실용 가치. DOCX 서식·한글 폰트·줄바꿈 QA 부담. PDF/ePub은 다음 단계로 분리 가능 |
@@ -112,7 +112,7 @@ LoreWeave 요금제는 아직 정할 단계가 아니다. 다만 설정 UI에서
 | **원고용 서식 툴바 전체 상시 표시** | 집중 모드에서는 접고 선택 시 필요한 동작만 | iA Writer/Ulysses의 집중 원칙을 참고한 제안. 작가가 자주 쓰는 기능은 단축키·문맥 메뉴에 남겨 발견성을 보완 |
 | **세계관·캐릭터·플롯·콘티 등 모든 분류를 처음부터 강제** | 프로젝트 템플릿에서 선택·이름 변경 허용 | 현재는 주로 폴더 분류. 구조화 기능처럼 보이는 과장을 줄이고 단편/에세이도 수용. 저장 폴더 자동 삭제는 하지 않음 |
 | **즉시 모바일·협업·연재 플랫폼 확장** | 초기 제품 범위에서 보류 | 경쟁 제품에도 있지만 현재 원고 보존·출력보다 선행할 이유가 약함. 기기 간 충돌·서버 운영·공유 권한 비용이 커짐 |
-| **전면 그래프·무한 Canvas를 먼저 추가** | 실제 탐색 필요 확인 전 보류 | Obsidian이 강한 영역. LoreWeave는 인물 문서 연결·참조 검색부터 제공해도 가치가 있음. 사용자 작업이 공간 배치에 의존할 때 확장 |
+| **전면 그래프·무한 Canvas를 먼저 추가** | 실제 탐색 필요 확인 전 보류 | Obsidian이 강한 영역. TextlinkEditor는 인물 문서 연결·참조 검색부터 제공해도 가치가 있음. 사용자 작업이 공간 배치에 의존할 때 확장 |
 | **기존 커스텀 에디터 즉시 폐기** | 지금은 권하지 않음 | 변경 폭과 회귀 위험이 큼. 먼저 Unicode/IME/성능 기준을 세우고 기존 엔진 개선과 AppKit 표준 텍스트 시스템 실험을 비교한 뒤 판단 |
 
 ## 4. 차별화 기능을 구체화하는 예시
@@ -121,7 +121,7 @@ LoreWeave 요금제는 아직 정할 단계가 아니다. 다만 설정 UI에서
 
 설정집에 “정체: 왕자”라는 작품 전체 사실만 저장하면 AI가 초반 장면에서 그 사실을 누설할 수 있다. 장면별로 **사건의 실제 사실 / 해당 인물이 알고 있는 사실 / 독자에게 공개된 사실**을 구별해서 참조하도록 한다.
 
-최소 구현은 복잡한 자동 추론이 아니라 설정 항목의 공개 시점과 수동 범위 지정이다. 검토 결과는 “2화에 등장한 이 문장이 7화 공개 설정을 전제로 하는 것 같습니다”와 원문 근거를 보여준다. 작가가 의도한 복선일 수 있으므로 자동 수정하지 않는다. 이는 경쟁 기능의 단순 복제가 아니라 LoreWeave가 선택할 수 있는 소설 편집 관점의 제안이다.
+최소 구현은 복잡한 자동 추론이 아니라 설정 항목의 공개 시점과 수동 범위 지정이다. 검토 결과는 “2화에 등장한 이 문장이 7화 공개 설정을 전제로 하는 것 같습니다”와 원문 근거를 보여준다. 작가가 의도한 복선일 수 있으므로 자동 수정하지 않는다. 이는 경쟁 기능의 단순 복제가 아니라 TextlinkEditor가 선택할 수 있는 소설 편집 관점의 제안이다.
 
 ### “이 수정은 무엇을 바꿨나”
 

@@ -16,13 +16,14 @@ struct TestEditorTab { var url: URL; var title: String }
     static let shared = EditorTabManager()
     var selectedTab: TestEditorTab?
     func flushEditor() {}
+    func isModified(url: URL) -> Bool { false }
     func getCachedContent(for url: URL) -> String? { nil }
 }
 final class CLIInstaller {
     static let shared = CLIInstaller()
     func openInstallPage(for type: AICLIType) {}
 }
-enum L10n { static func get(_ key: String) -> String { key } }
+enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentPrompt" ? "Document: {name}\n{document}\nQuestion: {question}" : key } }
 
 @main struct AIRegression {
     @MainActor static func main() async throws {
@@ -54,7 +55,7 @@ enum L10n { static func get(_ key: String) -> String { key } }
         expect(failed.failed, "Failed event is not assistant success")
         expect(AIPromptTemplateManager.render("{{question}} {{answer}}", values: ["question": "{{answer}}", "answer": "real"]) == "{{answer}} real", "Inserted text cannot replace another placeholder")
 
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("LoreweaveAIRegression-" + UUID().uuidString)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkEditorAIRegression-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let a = folder.appendingPathComponent("A.weaveproj")
@@ -145,6 +146,70 @@ enum L10n { static func get(_ key: String) -> String { key } }
         if vm.messages.last?.content != "new response" { FileHandle.standardError.write(Data(("Fixture failure: " + (vm.errorMessage ?? "none") + " content=" + (vm.messages.last?.content ?? "nil") + "\n").utf8)) }
         expect(vm.messages.last?.content == "new response" && vm.selectedCardId == bUser.id, "Followup stays in selected conversation")
         expect(vm.messages.last?.conversationId == bUser.id, "Followup identity remains persisted")
+        let manuscript = b.appendingPathComponent("manuscript.md")
+        var fullText = "alpha\n한글 😀 원고 전체"
+        try fullText.write(to: manuscript, atomically: true, encoding: .utf8)
+        EditorTabManager.shared.selectedTab = TestEditorTab(url: manuscript, title: "manuscript.md")
+        let observer = NotificationCenter.default.addObserver(forName: Notification.Name("editorWillPerformFileOperation"), object: nil, queue: .main) { note in
+            (note.userInfo?["captureSelection"] as? (String, NSRange) -> Void)?(fullText, NSRange(location: 0, length: 5))
+            if let apply = note.userInfo?["applyRevision"] as? (String, NSRange) -> String?, let updated = apply(fullText, NSRange(location: 0, length: 5)) { fullText = updated }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        vm.includeCurrentDocument = true
+        vm.inputText = "whole manuscript review"
+        vm.sendMessage()
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        let responseID = vm.messages.last!.id
+        let revision = ManuscriptRevisionBridge.load(id: responseID, project: b)!
+        expect(revision.target == fullText && revision.selectionLength == fullText.utf16.count, "whole prompt and apply scope match despite selected text")
+        let metadata = b.appendingPathComponent(".\(b.deletingPathExtension().lastPathComponent).weavedata")
+        let manifest = try JSONDecoder().decode(AIContextManifest.self, from: Data(contentsOf: metadata.appendingPathComponent("ai-context/\(responseID.uuidString).json")))
+        expect(manifest.text.contains(fullText) && manifest.entries.contains { $0.kind == .manuscript }, "manifest includes actual submitted manuscript")
+        let sidebarConversation = vm.selectedCardId
+        vm.inputText = "keep sidebar draft"
+        let inlineConversation = UUID()
+        vm.sendMessage(continueFromCardId: inlineConversation, inlineInput: "captured passage question")
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        expect(vm.inputText == "keep sidebar draft" && vm.selectedCardId == sidebarConversation, "inline request preserves sidebar draft and selected conversation")
+        expect(vm.messages.last?.conversationId == inlineConversation && vm.messages.last?.content == "new response", "inline response uses its own persisted conversation")
+        let inlineID = vm.messages.last!.id
+        let inlineManifest = try JSONDecoder().decode(AIContextManifest.self, from: Data(contentsOf: metadata.appendingPathComponent("ai-context/\(inlineID.uuidString).json")))
+        expect(!inlineManifest.entries.contains { $0.kind == .manuscript }, "inline request does not silently attach entire manuscript")
+        vm.sendMessage(continueFromCardId: inlineConversation, inlineInput: "follow up inline")
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        expect(vm.messages.last?.conversationId == inlineConversation, "inline followup stays in same conversation")
+        let editBase = fullText
+        let edit = ManuscriptRevision(id: UUID(), relativePath: "manuscript.md", original: editBase, selectionLocation: 0, selectionLength: 5)
+        let replacementJSON = String(decoding: try JSONSerialization.data(withJSONObject: ["replacement":"검정"]), as: UTF8.self)
+        let editJSON = String(decoding: try JSONSerialization.data(withJSONObject: ["type":"result", "subtype":"success", "result":replacementJSON]), as: UTF8.self)
+        try fixture("cat >/dev/null\nprintf '%s\\n' '" + editJSON + "'\n")
+        vm.sendMessage(inlineInput: "검정으로 수정", inlineRevision: edit)
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        expect(fullText == (editBase as NSString).replacingCharacters(in: NSRange(location: 0, length: 5), with: "검정"), "inline edit executes replacement on captured range")
+        expect(vm.messages.last?.kind == "inlineEdit" && vm.messages.last?.outcome == "completed", "inline edit records applied outcome separately")
+        expect(ChatHistoryManager.shared.loadSession(from: b)?.messages.last?.kind == "inlineEdit", "inline category survives history persistence")
+        let beforeStale = vm.messages.count
+        vm.sendMessage(inlineInput: "stale edit", inlineRevision: edit)
+        expect(vm.messages.count == beforeStale && !vm.isProcessing, "stale inline target prevents dispatch")
+        fullText = editBase
+        try fixture("cat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ordinary chat is not an edit\"}'\n")
+        vm.sendMessage(inlineInput: "invalid result", inlineRevision: edit)
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        expect(fullText == editBase && vm.messages.last?.outcome == "failed", "conversational response cannot overwrite manuscript")
+        let orphan = UUID()
+        try AIContextSelection.shared.persist(manifest, requestID: orphan, projectURL: b)
+        vm.clearHistory()
+        let artifactIDs = try AIContextSelection.shared.savedRequestIDs(projectURL: b)
+        expect(artifactIDs.isEmpty, "clear history removes orphan and linked artifacts")
+        let c = folder.appendingPathComponent("C")
+        try FileManager.default.createDirectory(at: c.appendingPathComponent(".C.weavedata"), withIntermediateDirectories: true)
+        try Data("invalid directory".utf8).write(to: c.appendingPathComponent(".C.weavedata/ai-revisions"))
+        EditorTabManager.shared.selectedTab = TestEditorTab(url: c.appendingPathComponent("draft.md"), title: "draft.md")
+        vm.setProject(c); vm.includeCurrentDocument = true; vm.inputText = "failed artifact preparation"
+        vm.sendMessage()
+        expect(!vm.isProcessing && vm.messages.isEmpty, "artifact preparation failure prevents dispatch")
+        let residual = try FileManager.default.contentsOfDirectory(at: c.appendingPathComponent(".C.weavedata/ai-context"), includingPropertiesForKeys: nil)
+        expect(residual.isEmpty, "failed revision preparation cleans already persisted manifest")
         print("AI regression passed: \(assertions) assertions (fixtures only)")
     }
 }

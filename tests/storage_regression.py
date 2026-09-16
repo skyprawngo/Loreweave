@@ -120,10 +120,10 @@ try DocumentFileStore.save(largeChanged, at: largeURL, expected: largeOriginal)
 expect(try! String(contentsOf: largeURL, encoding: .utf8) == largeChanged, "streamed atomic save preserves UTF8 chunk boundaries")
 print("ALL STORAGE REGRESSIONS PASSED")
 '''
-with tempfile.TemporaryDirectory(prefix="loreweave-storage-tests-") as work:
+with tempfile.TemporaryDirectory(prefix="textlinkeditor-storage-tests-") as work:
     work = Path(work)
     (work / "main.swift").write_text(swift)
-    subprocess.run(["xcrun", "swiftc", str(root / "Loreweave/Services/FileSystem/DocumentFileStore.swift"),
-                    str(root / "Loreweave/Services/Editor/EditorTabManager.swift"), str(work / "main.swift"),
+    subprocess.run(["xcrun", "swiftc", str(root / "TextlinkEditor/Services/FileSystem/DocumentFileStore.swift"),
+                    str(root / "TextlinkEditor/Services/Editor/EditorTabManager.swift"), str(root / "TextlinkEditor/Services/Versions/VersionHistoryStore.swift"), str(root / "TextlinkEditor/Services/Writing/WritingWorkspaceStore.swift"), str(work / "main.swift"),
                     "-o", str(work / "regression")], check=True)
     subprocess.run([str(work / "regression")], check=True)

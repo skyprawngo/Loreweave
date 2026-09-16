@@ -5,15 +5,16 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-engine = root / 'Loreweave/Services/Editor/TextEngine'
+engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
-sources += [root / 'Loreweave/Views/MainEditor/EditorPanel/LoreTextView' / name for name in ['LineRenderer.swift', 'LoreTextView.swift', 'LoreEditorView.swift', 'GutterView.swift']]
+sources += [root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView' / name for name in ['LineRenderer.swift', 'TextlinkTextView.swift', 'TextlinkEditorView.swift', 'GutterView.swift']]
 harness = r'''
 import Foundation
 import AppKit
 import CoreText
 
+enum L10n { static func get(_ key: String) -> String { key } }
 enum MarkdownFormatType { case bold, italic, boldItalic, strikethrough, underline }
 enum AppColors {
     static let nsTextEditorBackground = NSColor.textBackgroundColor
@@ -35,12 +36,21 @@ func expect(_ condition: @autoclosure () -> Bool, _ name: String) {
     precondition(condition(), name)
     print("PASS \(name)")
 }
-let menuView = LoreTextView(editorState: EditorState(text: "menu"))
+let menuView = TextlinkTextView(editorState: EditorState(text: "menu"))
 expect(menuView.responds(to: NSSelectorFromString("paste:")), "native paste selector")
 expect(menuView.responds(to: NSSelectorFromString("copy:")), "native copy selector")
 expect(menuView.responds(to: NSSelectorFromString("cut:")), "native cut selector")
 menuView.selectAll(nil)
 expect(menuView.editorState.copy() == "menu", "native select all")
+let quickMenu = menuView.selectionQuickMenu()
+expect(quickMenu.items[0].isEnabled && quickMenu.items[1].isEnabled, "selected text enables cut and copy")
+expect(menuView.editorState.copy() == "menu", "quick menu preserves selected text")
+let boldItem = quickMenu.items.first { $0.title == "editor.bold" }!
+_ = NSApplication.shared.sendAction(boldItem.action!, to: boldItem.target, from: boldItem)
+expect(menuView.editorState.getText() == "**menu**", "quick format uses editor command path")
+menuView.editorState.isEditable = false
+let readonlyMenu = menuView.selectionQuickMenu()
+expect(!readonlyMenu.items[0].isEnabled && !readonlyMenu.items.last!.isEnabled, "read-only menu disables mutation")
 let value = "😀e\u{301}한\n👨‍👩‍👧‍👦Z"
 let document = TextDocument(text: value)
 for line in 0..<document.lineCount {
@@ -101,7 +111,7 @@ renderer.renderComposition(before: "😀", marked: "한글", after: paragraph, a
 print("PASS wrapped selection and composition rendering")
 let inputState = EditorState(text: "😀AB")
 inputState.selection.moveCursor(line: 0, column: 1)
-let inputView = LoreTextView(editorState: inputState)
+let inputView = TextlinkTextView(editorState: inputState)
 expect(inputView.selectedRange().location == 2, "NSTextInputClient UTF16 cursor")
 inputView.setMarkedText("한", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
 expect(inputView.markedRange() == NSRange(location: 2, length: 1), "IME marked range")
@@ -111,7 +121,7 @@ inputView.commitMarkedTextSilently()
 expect(inputState.getText() == "😀한AB", "IME flush commit")
 inputView.insertText("Z", replacementRange: NSRange(location: 0, length: 2))
 expect(inputState.getText() == "Z한AB", "NSTextInputClient replacement UTF16")
-let editor = LoreEditorView(editorState: inputState)
+let editor = TextlinkEditorView(editorState: inputState)
 editor.frame = CGRect(x: 0, y: 0, width: 300, height: 200)
 editor.documentDidChange()
 expect(editor.textView.yPosition(for: 0, viewportWidth: 200) == 0, "layout origins")
@@ -134,7 +144,7 @@ expect(chunkDoc.getText() == chunkDoc.lines.map { $0.content }.joined(separator:
 chunkDoc.delete(fromLine: 254, column: 0, toLine: 770, column: 2)
 expect(chunkDoc.getText() == chunkDoc.lines.map { $0.content }.joined(separator: "\n"), "cross chunk deletion serialization")
 let chunkState = EditorState(text: (0..<800).map { $0 % 17 == 0 ? String(repeating: "한글😀 ", count: 40) : "short" }.joined(separator: "\n"))
-let chunkView = LoreTextView(editorState: chunkState)
+let chunkView = TextlinkTextView(editorState: chunkState)
 for width: CGFloat in [200, 350] {
     var expectedY: CGFloat = 0
     let referenceRenderer = LineRenderer(font: chunkState.configuration.font)
@@ -151,9 +161,19 @@ let boundaryY = chunkView.yPosition(for: 257, viewportWidth: 200)
 expect(chunkView.lineIndex(atY: boundaryY, viewportWidth: 200) == 257, "layout rebuild after structural edit")
 
 let resizeState = EditorState(text: String(repeating: "short 한😀\n", count: 10000))
-let resizeView = LoreTextView(editorState: resizeState)
+let resizeView = TextlinkTextView(editorState: resizeState)
+func settle(_ view: TextlinkTextView) {
+    let deadline = Date().addingTimeInterval(15)
+    while view.isLayoutPreparing && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    expect(!view.isLayoutPreparing, "background layout completes")
+}
+_ = resizeView.totalContentHeight(viewportWidth: 400)
+expect(resizeView.isLayoutPreparing, "large document defers full layout")
+settle(resizeView)
 let narrowHeight = resizeView.totalContentHeight(viewportWidth: 400)
 let measuredAtNarrow = resizeView.layoutMeasurementCount
+_ = resizeView.totalContentHeight(viewportWidth: 700)
+settle(resizeView)
 expect(resizeView.totalContentHeight(viewportWidth: 700) == narrowHeight, "widening retains exact single-row heights")
 expect(resizeView.layoutMeasurementCount == measuredAtNarrow, "widening avoids Core Text remeasurement")
 _ = resizeView.totalContentHeight(viewportWidth: 400)
@@ -162,7 +182,22 @@ resizeState.document.insert(String(repeating: "long ", count: 200), atLine: 300,
 let editedNarrowHeight = resizeView.totalContentHeight(viewportWidth: 400)
 expect(editedNarrowHeight > narrowHeight, "cached width invalidates edited chunk")
 _ = resizeView.totalContentHeight(viewportWidth: 700)
+settle(resizeView)
 expect(resizeView.totalContentHeight(viewportWidth: 400) == editedNarrowHeight, "edited layout survives toggle roundtrip")
+_ = resizeView.totalContentHeight(viewportWidth: 180)
+_ = resizeView.totalContentHeight(viewportWidth: 400)
+settle(resizeView)
+expect(resizeView.totalContentHeight(viewportWidth: 400) == editedNarrowHeight, "cancelled width cannot replace current geometry")
+let wrappedText = String(repeating: "한글 👨‍👩‍👧‍👦 abc ", count: 20)
+let asyncState = EditorState(text: Array(repeating: wrappedText, count: 5000).joined(separator: "\n"))
+let asyncView = TextlinkTextView(editorState: asyncState)
+_ = asyncView.totalContentHeight(viewportWidth: 180)
+_ = asyncView.totalContentHeight(viewportWidth: 400)
+settle(asyncView)
+let exactRenderer = LineRenderer(font: asyncState.configuration.font)
+exactRenderer.lineHeightMultiple = asyncState.configuration.lineHeightMultiple
+let expectedHeight = exactRenderer.calculateHeight(for: TextLine(content: wrappedText), viewportWidth: 400) * 5000
+expect(asyncView.totalContentHeight(viewportWidth: 400) == expectedHeight, "provisional geometry never becomes exact widening cache")
 print("ALL TEXT ENGINE REGRESSIONS PASSED")
 '''
 with tempfile.TemporaryDirectory(prefix='lore-text-tests-') as directory:

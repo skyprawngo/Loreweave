@@ -10,18 +10,19 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-engine = root / 'Loreweave/Services/Editor/TextEngine'
-views = root / 'Loreweave/Views/MainEditor/EditorPanel/LoreTextView'
+engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
+views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
-sources += [views / name for name in ['LineRenderer.swift', 'LoreTextView.swift', 'LoreEditorView.swift', 'GutterView.swift']]
-representable = (views / 'LoreEditorRepresentable.swift').read_text().split('// MARK: - Preview')[0]
-representable = representable.replace('struct LoreEditorRepresentable: NSViewRepresentable {', 'struct LoreEditorRepresentable {\n    struct Context { let coordinator: Coordinator }')
+sources += [views / 'NativeManuscriptView.swift']
+representable = (views / 'TextlinkEditorRepresentable.swift').read_text().split('// MARK: - Preview')[0]
+representable = representable.replace('struct TextlinkEditorRepresentable: NSViewRepresentable {', 'struct TextlinkEditorRepresentable {\n    struct Context { let coordinator: Coordinator }')
 harness = r'''
 import Foundation
 import AppKit
 import SwiftUI
 
+enum L10n { static func get(_ key: String) -> String { key } }
 enum MarkdownFormatType { case bold, italic, boldItalic, strikethrough, underline }
 enum AppColors {
     static let nsTextEditorBackground = NSColor.textBackgroundColor
@@ -53,8 +54,8 @@ let urlA = URL(fileURLWithPath: "/tmp/a.md"), urlB = URL(fileURLWithPath: "/tmp/
 var cache: [URL: String] = [:]
 let active = Box<(UUID, URL)>((a, urlA))
 let revision = Box(UUID())
-func parent(_ id: UUID, _ url: URL) -> LoreEditorRepresentable {
-    LoreEditorRepresentable(text: binding(content), cursorLine: binding(cursorLine), cursorColumn: binding(cursorColumn),
+func parent(_ id: UUID, _ url: URL) -> TextlinkEditorRepresentable {
+    TextlinkEditorRepresentable(text: binding(content), cursorLine: binding(cursorLine), cursorColumn: binding(cursorColumn),
         selectedLineRange: binding(selected), externallyModifiedLines: binding(modified),
         fontSize: 14, fontName: "Menlo", lineHeightMultiple: 1.5, letterSpacing: 0,
         isEditable: true, initialCursorPosition: nil,
@@ -65,36 +66,37 @@ func parent(_ id: UUID, _ url: URL) -> LoreEditorRepresentable {
 }
 var p = parent(a, urlA)
 let coordinator = p.makeCoordinator()
-let context = LoreEditorRepresentable.Context(coordinator: coordinator)
+let context = TextlinkEditorRepresentable.Context(coordinator: coordinator)
 let view = p.makeNSView(context: context)
 drain()
 view.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
-expect(cache[urlA] == view.editorState.getText(), "typing updates owner cache synchronously")
+expect(cache[urlA] == view.textView.string, "typing updates owner cache synchronously")
 drain()
 p.updateNSView(view, context: context)
-expect(view.editorState.canUndo, "A records undo")
+expect(view.textView.undoManager!.canUndo, "A records undo")
 let aText = content.value
 content.value = aText
 active.value = (b, urlB)
 p = parent(b, urlB)
 p.updateNSView(view, context: context)
 drain()
-expect(!view.editorState.canUndo, "same text B has independent undo")
+expect(!view.textView.undoManager!.canUndo, "same text B has independent undo")
 active.value = (a, urlA)
 p = parent(a, urlA)
 p.updateNSView(view, context: context)
 drain()
-expect(view.editorState.canUndo && view.editorState.undo(), "A undo retained after B")
-expect(view.editorState.getText() == "same", "A undo restores own text")
-content.value = view.editorState.getText()
+expect(view.textView.undoManager!.canUndo, "A undo retained after B")
+view.textView.undoManager!.undo()
+expect(view.textView.string == "same", "A undo restores own text")
+content.value = view.textView.string
 let renamed = URL(fileURLWithPath: "/tmp/renamed.md")
 active.value = (a, renamed)
 p = parent(a, renamed)
 p.updateNSView(view, context: context)
-expect(view.editorState.canRedo, "same UUID rename preserves redo")
+expect(view.textView.undoManager!.canRedo, "same UUID rename preserves redo")
 view.textView.setMarkedText("한", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
 NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil)
-expect(cache[renamed] == view.editorState.getText() && content.value.contains("한"), "flush owns renamed document")
+expect(cache[renamed] == view.textView.string && content.value.contains("한"), "flush owns renamed document")
 drain()
 p.updateNSView(view, context: context)
 
@@ -106,7 +108,7 @@ let next = parent(b, urlB)
 var obsolete = parent(a, renamed)
 obsolete.editCommand = EditorCommand(.replace("queued-A", replacement: "WRONG", all: true))
 obsolete.updateNSView(view, context: context)
-expect(view.editorState.getText().contains("queued-A"), "obsolete presentation cannot consume editor command")
+expect(view.textView.string.contains("queued-A"), "obsolete presentation cannot consume editor command")
 drain()
 expect(content.value == "B disk content", "pending A callback cannot replace B binding")
 NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil)
@@ -121,11 +123,11 @@ drain()
 expect(content.value == "B external revision", "queued same-document callback cannot replace external revision")
 let reloaded = parent(b, urlB)
 reloaded.updateNSView(view, context: context)
-expect(view.editorState.getText() == "B external revision", "external revision clears pending buffer")
-expect(!view.editorState.canUndo, "external revision invalidates obsolete undo")
+expect(view.textView.string == "B external revision", "external revision clears pending buffer")
+expect(!view.textView.undoManager!.canUndo, "external revision invalidates obsolete undo")
 // A failed read presents a disabled empty state but must never become a saved draft.
 var invalid = parent(b, urlB)
-invalid = LoreEditorRepresentable(text: binding(content), cursorLine: binding(cursorLine), cursorColumn: binding(cursorColumn),
+invalid = TextlinkEditorRepresentable(text: binding(content), cursorLine: binding(cursorLine), cursorColumn: binding(cursorColumn),
     selectedLineRange: binding(selected), externallyModifiedLines: binding(modified),
     fontSize: 14, fontName: "Menlo", lineHeightMultiple: 1.5, letterSpacing: 0,
     isEditable: false, initialCursorPosition: nil,
@@ -140,6 +142,24 @@ active.value = (a, urlA)
 content.value = "same"
 parent(a, urlA).updateNSView(view, context: context)
 expect(cache[urlB] == "preserved read baseline", "leaving read-failure document cannot overwrite cache")
+view.textView.setSelectedRange(NSRange(location: 0, length: 2))
+drain()
+expect(selected.value == 1...1, "native selection publishes status range")
+var captured: String?
+let capture: (String, NSRange) -> Void = { text, range in captured = (text as NSString).substring(with: range) }
+NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil, userInfo: ["captureSelection": capture])
+expect(captured == "sa", "AI capture preserves selected manuscript range")
+let original = view.textView.string
+let apply: (String, NSRange) -> String? = { text, _ in text == original ? "AI proposal" : nil }
+NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil, userInfo: ["applyRevision": apply])
+expect(view.textView.string == "AI proposal" && cache[urlA] == "AI proposal", "AI apply updates actual native editor and owner cache")
+view.textView.undo(nil)
+expect(view.textView.string == original, "AI application is native Undo operation")
+var staleInvoked = false
+let staleCapture: (String, NSRange) -> Void = { _, _ in staleInvoked = true }
+active.value = (b, urlB)
+NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil, userInfo: ["captureSelection": staleCapture])
+expect(!staleInvoked, "inactive presentation cannot capture another manuscript")
 print("EDITOR BINDING REGRESSION COMPLETED")
 '''
 with tempfile.TemporaryDirectory(prefix='lore-binding-tests-') as directory:

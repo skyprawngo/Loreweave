@@ -14,7 +14,7 @@ let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 900, pixelsHigh
 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
 for count in [1000, 10000, 100000] {
     let state = EditorState(text: (0..<count).map { "\($0) 한글 원고와 emoji 😀 " + String(repeating: "word ", count: $0 % 23) }.joined(separator: "\n"))
-    let view = LoreTextView(editorState: state)
+    let view = TextlinkTextView(editorState: state)
     let start = CFAbsoluteTimeGetCurrent()
     let height = view.totalContentHeight(viewportWidth: 792)
     let layoutMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
@@ -32,10 +32,10 @@ for count in [1000, 10000, 100000] {
     precondition(times[114] < 50, "offscreen rendering exceeded 50ms budget")
 }
 '''
-engine = root / 'Loreweave/Services/Editor/TextEngine'
+engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
-sources += [root / 'Loreweave/Views/MainEditor/EditorPanel/LoreTextView' / name for name in ['LineRenderer.swift', 'LoreTextView.swift', 'LoreEditorView.swift', 'GutterView.swift']]
+sources += [root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView' / name for name in ['LineRenderer.swift', 'TextlinkTextView.swift', 'TextlinkEditorView.swift', 'GutterView.swift']]
 with tempfile.TemporaryDirectory(prefix='lore-scroll-bench-') as directory:
     if '--baseline' in sys.argv:
         baseline = []

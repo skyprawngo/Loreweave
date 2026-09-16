@@ -48,7 +48,7 @@ final class CLIDetector {
   expect(LoreCodexEnvironment.arguments.contains("cli_auth_credentials_store=\"keyring\""),"Keychain required without plaintext fallback")
   let rpc=CodexAccountRPC()
   try rpc.start(path:CommandLine.arguments[1],root:root)
-  let initResult=try await rpc.request("initialize",["clientInfo":["name":"loreweave-test","version":"1"]])
+  let initResult=try await rpc.request("initialize",["clientInfo":["name":"textlinkeditor-test","version":"1"]])
   expect(initResult["userAgent"] as? String == "fixture","initialize round trip")
   try rpc.notify("initialized")
   let result=try await rpc.request("account/read",["refreshToken":false])
@@ -67,8 +67,8 @@ final class CLIDetector {
  }
 }
 '''
-with tempfile.TemporaryDirectory(prefix='loreweave-oauth-test-') as d:
+with tempfile.TemporaryDirectory(prefix='textlinkeditor-oauth-test-') as d:
  p=Path(d);f=p/'fixture';f.write_text(fixture);f.chmod(0o700);h=p/'Regression.swift';h.write_text(harness)
- subprocess.run(['xcrun','swiftc','-parse-as-library',str(root/'Loreweave/Services/AI/Auth/ChatGPTAccountService.swift'),str(h),'-o',str(p/'test')],check=True)
+ subprocess.run(['xcrun','swiftc','-parse-as-library',str(root/'TextlinkEditor/Services/AI/Auth/ChatGPTAccountService.swift'),str(h),'-o',str(p/'test')],check=True)
  env=dict(os.environ,OPENAI_API_KEY='fixture-not-real',CODEX_ACCESS_TOKEN='fixture-not-real')
  subprocess.run([str(p/'test'),str(f),str(p/'private')],env=env,check=True,timeout=40)
