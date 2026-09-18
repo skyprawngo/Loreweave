@@ -1,4 +1,10 @@
 {
+  "toolbar.boldItalic": "굵은 기울임",
+  "storage.externalSaveTitle": "파일이 외부에서 변경되었습니다",
+  "storage.externalSaveMessage": "외부에서 파일이 변경되었거나 삭제되었습니다. 현재 편집 내용을 다른 이름으로 저장하시겠습니까?",
+  "storage.saveCopy": "다른 이름으로 저장",
+  "storage.externalDeleted": "외부에서 삭제됨",
+  "storage.externalConflict": "외부 변경 있음 · 저장 시 새 파일로 저장",
   "ai.workspace.returnToChat": "대화로 돌아가기",
   "app.name": "TextlinkEditor",
   "sidebar.project": "프로젝트",
@@ -373,7 +379,7 @@
   "ai.chat.documentPrompt": "첨부 원고 ({name}):\n{document}\n\n사용자 질문:\n{question}",
   "ai.chat.cancelled": "요청을 취소했습니다.",
   "ai.chat.attachCurrentDocument": "현재 원고 내용 첨부",
-  "ai.chat.contextDisclosure": "선택한 원고 내용과 참조 대화가 전송됩니다. Codex는 프로젝트를 읽을 수 있지만 변경하지 않습니다.",
+  "ai.chat.contextDisclosure": "선택한 원고와 참조 대화가 전송됩니다. Codex는 요청에 따라 프로젝트 원고를 직접 수정하고 저장할 수 있습니다.",
   "ai.chat.connectedHint": "CLI 설치가 확인되었습니다. 인증 상태는 첫 요청에서 확인합니다.",
   "ai.error.authentication": "CLI 인증이 필요합니다. 터미널에서 선택한 CLI에 로그인한 뒤 다시 시도하세요.",
   "ai.error.incompatibleCLI": "설치된 CLI가 필요한 실행 옵션을 지원하지 않습니다. 공식 설치 안내에서 CLI를 업데이트한 뒤 다시 시도하세요.",
@@ -587,5 +593,10 @@
   "ai.inline.allHistory": "전체",
   "ai.inline.chatHistory": "일반 대화",
   "ai.inline.applied": "원고에 적용했습니다. Undo로 되돌릴 수 있습니다.",
-  "ai.inline.invalidEdit": "유효한 편집 결과를 받지 못해 원고를 변경하지 않았습니다. 기록을 확인하고 다시 지시해 주세요."
+  "ai.inline.invalidEdit": "유효한 편집 결과를 받지 못해 원고를 변경하지 않았습니다. 기록을 확인하고 다시 지시해 주세요.",
+  "revision.savedExplanation": "실행 전과 실행 후에 저장된 원고입니다. 실행 중의 수동·외부 변경도 포함될 수 있습니다.",
+  "revision.noChanges": "원고 파일의 변경이 없습니다.",
+  "revision.file": "파일",
+  "revision.saved": "저장된 수정본",
+  "revision.fileAbsent": "파일 없음"
 }

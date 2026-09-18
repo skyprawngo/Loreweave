@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// UTF-8 documents have a loaded base version. Never silently replace a newer disk version.
 enum DocumentFileStore {
@@ -15,6 +16,54 @@ enum DocumentFileStore {
         try Data(content.utf8).write(to: url, options: .withoutOverwriting)
     }
 
+    /// Read on a worker in bounded I/O chunks. Decode only a complete UTF-8 snapshot:
+    /// neither a split scalar nor cancellation can publish a partial manuscript to the editor.
+    static func readInChunks(at url: URL, chunkSize: Int = 64 * 1024) async throws -> String {
+        let worker = Task.detached(priority: .userInitiated) { () throws -> String in
+            try Task.checkCancellation()
+            let coordinator = NSFileCoordinator()
+            var coordinationError: NSError?
+            var result: Result<String, Error>?
+            coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { target in
+                result = Result {
+                    let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+                    let before = try target.resourceValues(forKeys: keys)
+                    let handle = try FileHandle(forReadingFrom: target)
+                    defer { try? handle.close() }
+                    var opened = stat()
+                    guard fstat(handle.fileDescriptor, &opened) == 0 else { throw Failure.unreadable }
+                    var bytes = Data()
+                    while true {
+                        try Task.checkCancellation()
+                        guard let part = try handle.read(upToCount: max(1, chunkSize)), !part.isEmpty else { break }
+                        bytes.append(part)
+                    }
+                    try Task.checkCancellation()
+                    var refreshedTarget = target
+                    refreshedTarget.removeAllCachedResourceValues()
+                    let after = try refreshedTarget.resourceValues(forKeys: keys)
+                    var completed = stat(), pathState = stat()
+                    guard fstat(handle.fileDescriptor, &completed) == 0,
+                          stat(target.path, &pathState) == 0,
+                          opened.st_dev == pathState.st_dev, opened.st_ino == pathState.st_ino,
+                          opened.st_size == completed.st_size,
+                          opened.st_mtimespec.tv_sec == completed.st_mtimespec.tv_sec,
+                          opened.st_mtimespec.tv_nsec == completed.st_mtimespec.tv_nsec,
+                          opened.st_ctimespec.tv_sec == completed.st_ctimespec.tv_sec,
+                          opened.st_ctimespec.tv_nsec == completed.st_ctimespec.tv_nsec else { throw Failure.conflict }
+                    guard before.contentModificationDate == after.contentModificationDate,
+                          before.fileSize == after.fileSize else { throw Failure.conflict }
+                    guard let text = String(data: bytes, encoding: .utf8) else { throw Failure.unreadable }
+                    return text
+                }
+            }
+            if let coordinationError { throw coordinationError }
+            guard let result else { throw Failure.unreadable }
+            return try result.get()
+        }
+        return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+    }
+
     static func save(_ content: String, at url: URL, expected: String) throws {
         let coordinator = NSFileCoordinator()
         var coordinationError: NSError?
@@ -24,7 +73,7 @@ enum DocumentFileStore {
                 let data = try Data(contentsOf: target)
                 guard let disk = String(data: data, encoding: .utf8) else { throw Failure.unreadable }
                 guard disk == expected || disk == content else { throw Failure.conflict }
-                if disk != content { try writeAtomically(content, to: target) }
+                if disk != content { try writeAtomically(content, to: target, expected: data) }
             } catch { writeError = error }
         }
         if let error = coordinationError { throw error }
@@ -33,7 +82,7 @@ enum DocumentFileStore {
 
     /// Stream UTF-8 into a same-volume replacement, then publish only the complete file.
     /// Never patch the live manuscript in place: a failed write must leave the base intact.
-    private static func writeAtomically(_ content: String, to target: URL) throws {
+    private static func writeAtomically(_ content: String, to target: URL, expected: Data) throws {
         let manager = FileManager.default
         let directory = try manager.url(for: .itemReplacementDirectory, in: .userDomainMask,
                                         appropriateFor: target, create: true)
@@ -58,6 +107,8 @@ enum DocumentFileStore {
             try? handle.close()
             throw error
         }
+        // Preparing a large replacement can take time. Revalidate immediately before publishing.
+        guard try Data(contentsOf: target) == expected else { throw Failure.conflict }
         _ = try manager.replaceItemAt(target, withItemAt: temporary)
     }
 

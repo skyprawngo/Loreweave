@@ -6,6 +6,14 @@
 - `ThemeManager.swift`, `WindowStateManager.swift`: 테마 적용과 창 상태. 색상 계약은 [Theme](../../Theme/claude.md)에 있다.
 - `AlertHelper.swift`: `beginSheetModalWithArrowNavigation`으로 시트의 화살표 탐색을 제공한다. 기존 파일 작업 다이얼로그와 일관된 키보드 동작을 유지한다.
 
+## 에디터 도구 등록
+
+새 에디터 도구는 `EditorToolRegistry.swift`의 `tool(id, titleKey, category, impact, key, modifiers, operation)`으로 정의한다. 안정적인 ID, 번역 키, 영향 범위와 실행 처리가 한 선언에 속한다. 기본 키를 생략해도 `KeyboardShortcutManager`가 설정 행을 생성한다. 설정 화면의 별도 목록·액션 enum·기본 바인딩 배열에 새 도구를 중복 추가하지 않는다. 확장 등록은 `register`로 가능하며 중복 ID를 거부한다.
+
+툴바와 메뉴는 `.tool(id)`를 전달하고, 키보드는 같은 등록부를 조회한다. 실제 원고 실행은 `EditorToolTarget.runTool`과 `EditorToolBridge`를 거쳐 IME·읽기 전용·시작/종료 처리를 공유한다. 매개변수가 필요한 글꼴·크기·줄간격·자간 도구는 해당 컨트롤을 열고, 값 변경의 배치는 기존 `applyDisplayStyle` 트랜잭션이 담당한다. 툴의 새로운 능력이 필요하면 target 인터페이스를 확장하되 설정 행 생성 로직은 변경하지 않는다.
+
+단축키 JSON의 액션은 기존 문자열 ID 형식을 유지한다. 알 수 없는 ID도 보존하며, 새 기본 키가 기존 사용자 키와 충돌하면 새 도구를 미지정 상태로 병합한다. 미지정·단축키 비활성화는 툴바 실행을 금지하지 않는다. `tests/shortcut_regression.py`와 `tests/tool_registry_regression.py`는 임시 설정 파일로 등록·병합·키 변경·실제 원고 실행을 함께 검증한다.
+
 ## Undo 소유권
 
 원고는 문서 ID별 `EditorState` 자체 이력을 사용한다. AI 입력은 `AIChatView`의 `NSTextView` 기본 UndoManager를 사용하며, 외부에서 입력 내용을 바꿀 때 이력을 초기화한다. 남아 있는 `UndoSystem.swift`를 현재 AI 입력의 실행 경로로 가정하지 않는다.

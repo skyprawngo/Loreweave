@@ -12,7 +12,7 @@ final class CLIProcessManager {
     private var runner: CLIRequestRunner?
 
     func sendPrompt(_ prompt: String, cliType: AICLIType, workingDirectory: URL?,
-                    sessionId: String? = nil,
+                    sessionId: String? = nil, allowsWorkspaceEdits: Bool = false,
                     streamHandler: @escaping @MainActor @Sendable (String) -> Void) async throws -> CLIPromptResult {
         guard runner == nil else { throw CLIError.busy }
         guard let path = await CLIDetector.shared.resolvedPath(for: cliType) else {
@@ -30,8 +30,9 @@ final class CLIProcessManager {
             arguments = args
         case .chatgpt:
             try LoreCodexEnvironment.prepare()
-            var args = LoreCodexEnvironment.arguments + ["--ask-for-approval", "never", "exec", "--json", "--sandbox", "read-only",
+            var args = LoreCodexEnvironment.arguments + ["--ask-for-approval", "never", "exec", "--json", "--sandbox", allowsWorkspaceEdits ? "workspace-write" : "read-only",
                         "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"]
+            if let workingDirectory { args += ["--cd", workingDirectory.path] }
             if let sessionId { args += ["resume", sessionId] }
             args.append("-")
             arguments = args

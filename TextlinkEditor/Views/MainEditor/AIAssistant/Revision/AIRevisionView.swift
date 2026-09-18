@@ -1,65 +1,82 @@
 import SwiftUI
 
-struct AIRevisionPresentation: Identifiable {
-    let id = UUID()
-    let revision: ManuscriptRevision
-    let proposal: String
-    let project: URL
-    let changes: [ManuscriptRevision.Change]
-    init(revision: ManuscriptRevision, proposal: String, project: URL) {
-        self.revision = revision; self.proposal = proposal; self.project = project
-        self.changes = revision.changes(proposal: proposal)
-    }
-}
-
-struct AIRevisionView: View {
-    let presentation: AIRevisionPresentation
+/// The workspace agent has already saved these edits. This view never reapplies prose or patches.
+struct AIWorkspaceRevisionView: View {
+    let record: AIWorkspaceRevision
     @Environment(\.dismiss) private var dismiss
-    @State private var selected = Set<Int>()
-    @State private var error: String?
-    private var changes: [ManuscriptRevision.Change] { presentation.changes }
+    @State private var selectedPath: String?
+    private var selectedChange: AIWorkspaceChange? {
+        record.changes.first { $0.relativePath == selectedPath } ?? record.changes.first
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(L10n.get("revision.title")).font(.title2)
                 Spacer()
-                Button(L10n.get("common.close")) { dismiss() }
+                Button(L10n.get("common.close")) { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            Text(presentation.revision.relativePath).foregroundStyle(.secondary)
-            Text(L10n.get("revision.explanation")).font(.callout)
-            HStack {
-                Button(L10n.get("revision.selectAll")) { selected = Set(changes.map(\.id)) }
-                Button(L10n.get("revision.rejectAll")) { selected = [] }
-            }
-            List(changes) { change in
-                VStack(alignment: .leading) {
-                    Toggle(L10n.get("revision.accept"), isOn: Binding(get: { selected.contains(change.id) }, set: {
-                        if $0 { selected.insert(change.id) } else { selected.remove(change.id) }
-                    }))
-                    HStack(alignment: .top, spacing: 20) {
-                        VStack(alignment: .leading) {
-                            Text(L10n.get("revision.original")).font(.caption).foregroundStyle(.secondary)
-                            Text(change.before).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        VStack(alignment: .leading) {
-                            Text(L10n.get("revision.proposed")).font(.caption).foregroundStyle(.secondary)
-                            Text(change.after).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        }
+            Text(L10n.get("revision.savedExplanation")).font(.callout).foregroundStyle(.secondary)
+            if record.changes.isEmpty {
+                ContentUnavailableView(L10n.get("revision.noChanges"), systemImage: "doc.text.magnifyingglass")
+            } else {
+                Picker(L10n.get("revision.file"), selection: Binding(get: {
+                    selectedChange?.relativePath ?? ""
+                }, set: { selectedPath = $0 })) {
+                    ForEach(record.changes) { change in Text(change.relativePath).tag(change.relativePath) }
+                }
+                if let change = selectedChange {
+                    HStack(alignment: .top, spacing: 16) {
+                        pane(change.before, title: "revision.original")
+                        pane(change.after, title: "revision.saved")
                     }
-                }.padding(.vertical, 8)
-            }
-            if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-            HStack {
-                Spacer()
-                Button(L10n.get("revision.apply")) {
-                    do {
-                        try ManuscriptRevisionBridge.apply(presentation.revision, proposal: presentation.proposal,
-                            selected: selected, project: presentation.project)
-                        dismiss()
-                    } catch { self.error = error.localizedDescription }
-                }.disabled(selected.isEmpty).keyboardShortcut(.defaultAction)
+                }
             }
         }.padding(20).frame(minWidth: 760, minHeight: 520)
+    }
+
+    private func pane(_ text: String?, title: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.get(title)).font(.headline)
+            AIRevisionTextPane(text: text ?? L10n.get("revision.fileAbsent"))
+                .background(AppColors.textEditorBackground, in: RoundedRectangle(cornerRadius: 8))
+
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+
+/// Native TextKit 2 viewport layout keeps the entire saved revision searchable and scrollable.
+private struct AIRevisionTextPane: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        let editor = NSTextView(usingTextLayoutManager: true)
+        editor.frame = NSRect(x: 0, y: 0, width: 350, height: 480)
+        editor.isEditable = false
+        editor.isSelectable = true
+        editor.isRichText = false
+        editor.usesFindBar = true
+        editor.drawsBackground = false
+        editor.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        editor.textColor = .labelColor
+        editor.textContainerInset = NSSize(width: 10, height: 10)
+        editor.isVerticallyResizable = true
+        editor.isHorizontallyResizable = false
+        editor.autoresizingMask = [.width]
+        editor.textContainer?.widthTracksTextView = true
+        editor.textContainer?.containerSize = NSSize(width: 350, height: CGFloat.greatestFiniteMagnitude)
+        editor.string = text
+        scroll.documentView = editor
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let editor = scroll.documentView as? NSTextView, editor.string != text else { return }
+        editor.string = text
+        editor.scrollRangeToVisible(NSRange(location: 0, length: 0))
     }
 }

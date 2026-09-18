@@ -118,6 +118,130 @@ try DocumentFileStore.create(largeOriginal, at: largeURL)
 let largeChanged = largeOriginal + "final\n"
 try DocumentFileStore.save(largeChanged, at: largeURL, expected: largeOriginal)
 expect(try! String(contentsOf: largeURL, encoding: .utf8) == largeChanged, "streamed atomic save preserves UTF8 chunk boundaries")
+let aiFile = project.appendingPathComponent("ai-save.md")
+try DocumentFileStore.create("disk", at: aiFile)
+manager.openFile(FileSystemItem(url: aiFile, isDirectory: false))
+manager.setEditState(TabEditState(content: "visible draft", originalContent: "disk"), for: aiFile)
+try manager.prepareForAIWorkspaceEdit(project: project)
+expect(try! String(contentsOf: aiFile, encoding: .utf8) == "visible draft", "AI preflight saves visible draft before external editing")
+manager.setEditState(TabEditState(content: "unsaved", originalContent: "visible draft"), for: aiFile)
+try "external".write(to: aiFile, atomically: true, encoding: .utf8)
+do { try manager.prepareForAIWorkspaceEdit(project: project); fatalError("AI ignored draft conflict") } catch {}
+expect(manager.getCachedContent(for: aiFile) == "unsaved", "AI preflight preserves conflicting draft")
+expect(try! String(contentsOf: aiFile, encoding: .utf8) == "external", "AI preflight does not overwrite external changes")
+// Cache mutations must not invalidate tab/sidebar observation after the dirty flag is set.
+let isolation = EditorTabManager(recoveryDirectory: base.appendingPathComponent("IsolationRecovery"))
+isolation.restoreSession(from: project)
+isolation.closeAllTabs(force: true)
+isolation.openFile(FileSystemItem(url: file, isDirectory: false))
+isolation.setEditState(TabEditState(content: "draft", originalContent: "saved"), for: file)
+var tabInvalidations = 0
+withObservationTracking {
+    _ = isolation.tabs
+    _ = isolation.getCachedContent(for: file)
+    _ = isolation.getCachedCursorPosition(for: file)
+} onChange: { tabInvalidations += 1 }
+isolation.setCachedCursorPosition(line: 40000, column: 5, for: file)
+isolation.setCachedContent("another draft", for: file)
+expect(tabInvalidations == 0, "editing cache and cursor do not invalidate tab observers")
+isolation.setCachedContent("saved", for: file)
+expect(tabInvalidations == 1, "returning to saved contents updates tab dirty indicator")
+let largeDraft = String(repeating: "한글 😀 paragraph\n", count: 100000)
+isolation.setCachedContent(largeDraft, for: file)
+isolation.recoveryError = "pending"
+let queuedAt = Date()
+isolation.saveSession(to: project, asynchronously: true)
+print("TIME enqueue 100000-line recovery: \(Date().timeIntervalSince(queuedAt) * 1000) ms")
+var pulses = 0
+let timer = Timer.scheduledTimer(withTimeInterval: 0.001, repeats: true) { _ in pulses += 1 }
+let deadline = Date().addingTimeInterval(10)
+while isolation.recoveryError == "pending", Date() < deadline {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.002))
+}
+timer.invalidate()
+expect(isolation.recoveryError == nil && pulses > 0, "main run loop continues during background recovery encoding and disk writes")
+print("RECOVERY main-loop pulses \(pulses)")
+isolation.saveSession(to: project, asynchronously: true)
+isolation.setCachedContent("newest snapshot", for: file)
+isolation.saveSession(to: project)
+isolation.restoreSession(from: project)
+expect(isolation.getCachedContent(for: file) == "newest snapshot", "explicit save follows queued autosave without stale overwrite")
+
+// External synchronization: use real files, presenters, vnode events and the main run loop.
+func waitFor(_ label: String, _ condition: () -> Bool) {
+    let deadline = Date().addingTimeInterval(8)
+    while !condition(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    expect(condition(), label)
+}
+let syncProject = base.appendingPathComponent("Sync.weaveproj")
+try FileManager.default.createDirectory(at: syncProject.appendingPathComponent(".Sync.weavedata"), withIntermediateDirectories: true)
+let sync = EditorTabManager(recoveryDirectory: base.appendingPathComponent("sync-recovery"))
+sync.restoreSession(from: syncProject)
+let first = syncProject.appendingPathComponent("first.md")
+let second = syncProject.appendingPathComponent("second.md")
+try DocumentFileStore.create("base", at: first)
+try DocumentFileStore.create("other", at: second)
+sync.openFile(FileSystemItem(url: first, isDirectory: false))
+sync.setEditState(TabEditState(content: "base", originalContent: "base"), for: first)
+sync.openFile(FileSystemItem(url: second, isDirectory: false))
+sync.setEditState(TabEditState(content: "other", originalContent: "other"), for: second)
+try "before event".write(to: first, atomically: true, encoding: .utf8)
+expect(sync.saveTab(at: sync.findTab(with: first)!, content: "base"), "saving clean stale tab adopts external content without a conflict prompt")
+expect(sync.getCachedContent(for: first) == "before event", "clean save cannot overwrite newer external content")
+try "external 1".write(to: first, atomically: true, encoding: .utf8)
+waitFor("inactive tab receives atomic external replacement") { sync.getCachedContent(for: first) == "external 1" }
+let stamp = try FileManager.default.attributesOfItem(atPath: first.path)[.modificationDate] as! Date
+let inPlace = try FileHandle(forWritingTo: first)
+try inPlace.write(contentsOf: Data("external 2".utf8))
+try inPlace.close()
+try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: first.path)
+waitFor("same-size in-place write with preserved timestamp is detected") { sync.getCachedContent(for: first) == "external 2" }
+sync.setCachedContent("local draft", for: first)
+try "external 3".write(to: first, atomically: true, encoding: .utf8)
+waitFor("competing external edit records silent conflict") { sync.diskState(for: first) == .conflict }
+expect(sync.getCachedContent(for: first) == "local draft" && sync.getEditState(for: first)?.originalContent == "external 2", "conflict preserves both draft and original base")
+expect(!sync.saveTab(at: sync.findTab(with: first)!, content: "local draft"), "automatic save refuses conflict without a dialog")
+expect(try! String(contentsOf: first, encoding: .utf8) == "external 3", "external file is never overwritten on conflict")
+try "local draft".write(to: first, atomically: true, encoding: .utf8)
+waitFor("matching external and local edits clear conflict automatically") { sync.diskState(for: first) == .current && !sync.isModified(url: first) }
+sync.setCachedContent("keep this", for: first)
+try "new external".write(to: first, atomically: true, encoding: .utf8)
+waitFor("second atomic replacement reconnects file watch") { sync.diskState(for: first) == .conflict }
+let copy = syncProject.appendingPathComponent("copy.md")
+do { try sync.saveConflictCopy(from: first, to: first); fatalError("overwrote source") } catch {}
+do { try sync.saveConflictCopy(from: first, to: second); fatalError("overwrote destination") } catch {}
+expect(sync.getCachedContent(for: first) == "keep this", "failed copy preserves draft")
+let firstID = sync.tabs[sync.findTab(with: first)!].id
+try sync.saveConflictCopy(from: first, to: copy)
+expect(sync.tabs[sync.findTab(with: copy)!].id == firstID && !sync.isModified(url: copy), "successful copy relocates same tab and marks saved")
+expect(try! String(contentsOf: first, encoding: .utf8) == "new external", "save copy preserves external original")
+expect(try! String(contentsOf: copy, encoding: .utf8) == "keep this", "save copy contains local draft")
+try FileManager.default.removeItem(at: second)
+waitFor("external deletion marks tab missing") { sync.diskState(for: second) == .missing }
+expect(sync.getCachedContent(for: second) == "other" && !sync.tabs[sync.findTab(with: second)!].fileExists, "deleted clean document retains editor contents and missing title state")
+expect(!sync.saveTab(at: sync.findTab(with: second)!, content: "other"), "save never recreates deleted source")
+sync.saveSession(to: syncProject)
+let recoveredMissing = EditorTabManager(recoveryDirectory: base.appendingPathComponent("sync-recovery"))
+recoveredMissing.restoreSession(from: syncProject)
+expect(recoveredMissing.getCachedContent(for: second) == "other", "deleted clean buffer survives unexpected restart")
+_ = recoveredMissing.closeAllTabs(force: true)
+NSAlert.responses = [.alertThirdButtonReturn]
+sync.closeTab(at: sync.findTab(with: second)!)
+expect(sync.findTab(with: second) == nil && NSAlert.responses.count == 1, "closing deleted document discards without prompting")
+sync.setCachedContent("discard conflict", for: copy)
+try "external copy".write(to: copy, atomically: true, encoding: .utf8)
+// No run-loop wait: close must detect an event not yet delivered by its watcher.
+sync.closeTab(at: sync.findTab(with: copy)!)
+expect(sync.tabs.isEmpty && NSAlert.responses.count == 1, "close detects racing external change and silently discards")
+sync.restoreSession(from: syncProject)
+expect(sync.tabs.isEmpty, "explicitly closed conflicts do not resurrect from recovery")
+NSAlert.responses = []
+let unreadTab = syncProject.appendingPathComponent("not-yet-loaded.md")
+try DocumentFileStore.create("unloaded", at: unreadTab)
+sync.openFile(FileSystemItem(url: unreadTab, isDirectory: false))
+try FileManager.default.removeItem(at: unreadTab)
+waitFor("unloaded restored-style tab still tracks deletion") { sync.diskState(for: unreadTab) == .missing }
+sync.closeTab(at: sync.findTab(with: unreadTab)!)
 print("ALL STORAGE REGRESSIONS PASSED")
 '''
 with tempfile.TemporaryDirectory(prefix="textlinkeditor-storage-tests-") as work:

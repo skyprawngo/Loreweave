@@ -99,13 +99,23 @@ struct TextlinkEditorCommands: Commands {
     @ObservedObject var appCommands: AppCommands
 
     var body: some Commands {
-        CommandMenu(L10n.ai.tools) {
-            Button(L10n.ai.continueWritingAction) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.continueWritingAction) }
-                .configuredShortcut(.aiContinueWriting)
-            Button(L10n.ai.refineText) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.refineText) }
-                .configuredShortcut(.aiRefine)
-            Button(L10n.ai.summarize) { NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: L10n.ai.summarize) }
-                .configuredShortcut(.aiSummarize)
+        CommandMenu(L10n.get("toolbar.format")) {
+            ForEach(EditorToolRegistry.tools) { tool in
+                Button(L10n.get(tool.titleKey)) {
+                    NotificationCenter.default.post(name: Notification.Name("executeEditorTool"), object: tool.id)
+                }
+                .configuredShortcut(ShortcutAction(rawValue: tool.id))
+            }
+        }
+        CommandGroup(replacing: .undoRedo) {
+            Button(L10n.get("shortcut.edit.undo")) { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }.configuredShortcut(.undo)
+            Button(L10n.get("shortcut.edit.redo")) { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }.configuredShortcut(.redo)
+        }
+        CommandGroup(replacing: .pasteboard) {
+            Button(L10n.get("shortcut.edit.cut")) { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }.configuredShortcut(.cut)
+            Button(L10n.get("shortcut.edit.copy")) { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }.configuredShortcut(.copy)
+            Button(L10n.get("shortcut.edit.paste")) { NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil) }.configuredShortcut(.paste)
+            Button(L10n.get("shortcut.edit.selectAll")) { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) }.configuredShortcut(.selectAll)
         }
         // 파일 메뉴
         CommandGroup(replacing: .newItem) {
@@ -228,7 +238,7 @@ struct TextlinkEditorCommands: Commands {
                     appCommands.goToTabRequested = index
                 }
 
-                .configuredShortcut(ShortcutAction(rawValue: "tab.goTo\(index)")!)
+                .configuredShortcut(ShortcutAction(rawValue: "tab.goTo\(index)"))
             }
         }
 

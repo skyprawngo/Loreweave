@@ -19,4 +19,4 @@ xcrun swiftc -parse-as-library \
   TextlinkEditor/Services/FileSystem/DocumentFileStore.swift \
   TextlinkEditor/Views/MainEditor/AIAssistant/AIAssistantViewModel.swift \
   tests/ai/Regression.swift -o "$task_dir/regression"
-"$task_dir/regression"
+"$task_dir/regression" "$@"

@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Verify shared tool lifecycle, attribute deltas, undo and large-document layout."""
+from pathlib import Path
+import subprocess
+import tempfile
+
+root = Path(__file__).resolve().parents[1]
+engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
+views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
+sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
+sources += sorted((engine / 'EditorState').glob('*.swift'))
+sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += [views / name for name in ['PreparedManuscript.swift', 'EditorToolBridge.swift', 'NativeManuscriptView.swift']]
+prefix = (root / 'tests/editor_binding_regression.py').read_text().split("harness = r'''", 1)[1].split('final class Box', 1)[0]
+harness = r'''
+setbuf(stdout, nil)
+func expect(_ value: @autoclosure () -> Bool, _ message: String) { precondition(value(), message); print("PASS \(message)") }
+let app = NSApplication.shared
+let view = NativeManuscriptTextView()
+let host = NativeManuscriptHost(textView: view)
+let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+window.contentView = host
+window.makeFirstResponder(view)
+window.orderFront(nil)
+let manager = view.textLayoutManager!
+var events: [EditorToolBridge.Event] = []
+view.toolBridge.onEvent = { events.append($0) }
+func verifyCompleted(_ name: String) {
+    expect(events.map(\.phase) == [.began, .applied, .viewportLaidOut, .ended], "\(name) shares the full layout lifecycle")
+    expect(Set(events.map(\.id)).count == 1 && events.last?.outcome == .applied, "\(name) completes one identified operation")
+    events.removeAll()
+}
+let text = String(repeating: "한글 원고 😀 글꼴과 줄간격과 자간 변경을 즉시 반영합니다. 긴 문장 줄바꿈 검증입니다.\n", count: 100000)
+view.load(text)
+view.applyDisplayStyle(.init(fontName: "SF Pro", fontSize: 14, lineHeightMultiple: 1, letterSpacing: 0))
+window.displayIfNeeded()
+view.setSelectedRange(NSRange(location: view.offset(line: 90000, column: 2), length: 0))
+view.scrollRangeToVisible(view.selectedRange())
+window.displayIfNeeded()
+events.removeAll()
+var edits = 0
+let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: view.textStorage, queue: nil) { _ in edits += 1 }
+let cases: [(String, EditorDisplayStyle)] = [
+    ("font", .init(fontName: "Menlo", fontSize: 14, lineHeightMultiple: 1, letterSpacing: 0)),
+    ("size", .init(fontName: "Menlo", fontSize: 18, lineHeightMultiple: 1, letterSpacing: 0)),
+    ("lineSpacing", .init(fontName: "Menlo", fontSize: 18, lineHeightMultiple: 1.5, letterSpacing: 0)),
+    ("letterSpacing", .init(fontName: "Menlo", fontSize: 18, lineHeightMultiple: 1.5, letterSpacing: 1.5))]
+for (name, style) in cases {
+    let selection = view.selectedRange()
+    edits = 0
+    let start = CFAbsoluteTimeGetCurrent()
+    view.applyDisplayStyle(style)
+    let applied = CFAbsoluteTimeGetCurrent()
+    expect(edits == 1, "\(name) batches attributes into one storage edit")
+    window.displayIfNeeded()
+    print("TIME \(name): apply \((applied-start)*1000) ms, viewport \((CFAbsoluteTimeGetCurrent()-applied)*1000) ms")
+    verifyCompleted(name)
+    expect(view.selectedRange() == selection && !view.visibleManuscriptLines().isEmpty, "\(name) preserves selection and a populated viewport")
+    let attributes = view.textStorage!.attributes(at: selection.location, effectiveRange: nil)
+    expect((attributes[.font] as? NSFont)?.pointSize == style.fontSize, "\(name) applies glyph font size")
+    expect((view.typingAttributes[.font] as? NSFont)?.fontName == NSFont(name: style.fontName, size: style.fontSize)?.fontName,
+           "\(name) uses the requested typing font family")
+    expect((attributes[.kern] as? NSNumber)?.doubleValue == Double(style.letterSpacing), "\(name) applies tracking")
+    expect((attributes[.paragraphStyle] as? NSParagraphStyle)?.lineHeightMultiple == style.lineHeightMultiple, "\(name) applies paragraph spacing")
+}
+
+// Cursor above/below the viewport must be placed at the top before style mutation.
+func cursorScreenY() -> CGFloat {
+    guard let rect = view.lineRect(at: view.selectedRange().location) else { return -.infinity }
+    return rect.minY + view.textContainerOrigin.y - host.contentView.bounds.minY
+}
+for row in [9, 90000] {
+    view.setSelectedRange(NSRange(location: view.offset(line: row, column: 2), length: 0))
+    view.scrollRangeToVisible(NSRange(location: view.offset(line: row == 9 ? 99 : 100, column: 0), length: 0))
+    window.displayIfNeeded()
+    var relocatedBeforeMutation = false
+    view.toolBridge.perform(.init(name: "anchorProbe", category: .presentation, effects: [.layout])) {
+        relocatedBeforeMutation = abs(cursorScreenY()) < 1
+        return true
+    }
+    window.displayIfNeeded()
+    expect(relocatedBeforeMutation, "offscreen cursor row \(row + 1) reaches top before mutation")
+    for (_, style) in cases {
+        view.applyDisplayStyle(style)
+        window.displayIfNeeded()
+        print("ANCHOR row \(row + 1) y \(cursorScreenY())")
+        expect(abs(cursorScreenY()) < 1, "cursor row \(row + 1) stays at top through font/size/spacing changes")
+    }
+}
+view.setSelectedRange(NSRange(location: view.offset(line: 90003, column: 2), length: 0))
+window.displayIfNeeded()
+let visibleCursorY = cursorScreenY()
+expect(visibleCursorY > 0 && visibleCursorY < host.contentSize.height, "visible cursor fixture is below viewport top")
+view.applyDisplayStyle(cases[0].1)
+window.displayIfNeeded()
+expect(abs(cursorScreenY() - visibleCursorY) < 1, "visible cursor retains its screen position after reflow")
+for size in [15.0, 16, 17, 16, 15] {
+    view.applyDisplayStyle(.init(fontName: "Menlo", fontSize: size, lineHeightMultiple: 1.25, letterSpacing: 0.3))
+}
+window.displayIfNeeded()
+print("SCRUB anchor before \(visibleCursorY), after \(cursorScreenY())")
+expect(abs(cursorScreenY() - visibleCursorY) < 1, "continuous style scrubbing preserves cursor anchor before the next frame")
+
+view.applyDisplayStyle(cases.last!.1)
+window.displayIfNeeded()
+events.removeAll()
+NotificationCenter.default.removeObserver(observer)
+let lastStyle = cases.last!.1
+view.applyDisplayStyle(lastStyle)
+expect(events.isEmpty, "unchanged SwiftUI configuration does not dispatch another tool")
+expect(view.string == text, "presentation tools never change manuscript bytes")
+let delta = EditorDisplayStyle(fontName: "Menlo", fontSize: 18, lineHeightMultiple: 1.5, letterSpacing: 2).changedAttributes(from: lastStyle)
+expect(Set(delta.keys) == [.kern], "tracking delta does not reset fallback fonts or paragraphs")
+view.setSelectedRange(NSRange(location: 0, length: 0))
+view.setMarkedText("ㅎ", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+view.applyDisplayStyle(.init(fontName: "Menlo", fontSize: 18, lineHeightMultiple: 1.5, letterSpacing: 2))
+window.displayIfNeeded()
+expect(view.hasMarkedText(), "presentation tools preserve ongoing IME composition")
+view.insertText("한", replacementRange: NSRange(location: NSNotFound, length: 0))
+view.undo(nil)
+expect(view.string == text, "composition and Undo survive presentation changes")
+for (type, prefix) in [(MarkdownFormatType.bold, "**"), (.italic, "*"), (.underline, "<u>"), (.strikethrough, "~~")] {
+    view.setSelectedRange(NSRange(location: 0, length: 5))
+    events.removeAll()
+    view.execute(EditorCommand(.format(type)))
+    window.displayIfNeeded()
+    verifyCompleted("format.\(type)")
+    expect(view.string.hasPrefix(prefix), "format.\(type) preserves markdown semantics")
+    view.undo(nil)
+    expect(view.string == text, "format.\(type) is one undo operation")
+}
+view.setSelectedRange(NSRange(location: 0, length: 0))
+events.removeAll()
+view.execute(EditorCommand(.format(.bold)))
+expect(events.map(\.phase) == [.began, .applied, .ended] && events.last?.outcome == .unchanged, "empty selection finishes without scheduling layout")
+view.isEditable = false
+events.removeAll()
+view.execute(EditorCommand(.replace("한글", replacement: "changed", all: true)))
+expect(events.map(\.phase) == [.began, .ended] && events.last?.outcome == .cancelled, "read-only edits rejected at the shared entry point")
+view.isEditable = true
+var drafts = 0
+let draftObserver = NotificationCenter.default.addObserver(forName: Notification.Name("aiDraftAction"), object: nil, queue: nil) { _ in drafts += 1 }
+events.removeAll()
+view.execute(EditorCommand(.assistantDraft("test request")))
+expect(drafts == 1 && events.map(\.phase) == [.began, .applied, .ended], "assistant dispatch shares lifecycle without reflow")
+NotificationCenter.default.removeObserver(draftObserver)
+events.removeAll()
+let custom = EditorToolDescriptor(name: "futureTool", category: .presentation, effects: [.layout])
+view.toolBridge.perform(custom) { true }
+view.load("replacement document")
+expect(events.last?.phase == .ended && events.last?.outcome == .cancelled, "document replacement cancels outstanding tool completion")
+events.removeAll()
+var nestedRan = false
+view.toolBridge.onEvent = { event in
+    events.append(event)
+    if event.phase == .began && event.tool.name == "outer" {
+        view.toolBridge.perform(.init(name: "nested", category: .assistant, effects: [])) { nestedRan = true; return true }
+    }
+}
+view.toolBridge.perform(.init(name: "outer", category: .assistant, effects: [])) { true }
+expect(!nestedRan && events.filter { $0.tool.name == "nested" }.last?.outcome == .cancelled, "observer cannot reenter tool mutation")
+view.toolBridge.onEvent = { events.append($0) }
+events.removeAll()
+view.toolBridge.perform(custom) { true }
+// External reload and inline AI apply share first-visible-line anchoring.
+let externalBase = (1...150).map { "row \($0) 한글 😀" }.joined(separator: "\n")
+for undoable in [false, true] {
+    view.load(externalBase)
+    view.applyDisplayStyle(.init(fontName: "Menlo", fontSize: 14, lineHeightMultiple: 1, letterSpacing: 0))
+    window.displayIfNeeded()
+    view.setSelectedRange(NSRange(location: view.offset(line: 23, column: 2), length: 0))
+    view.restoreCursorViewportAnchor(.init(offset: view.offset(line: 9, column: 0), screenY: -3))
+    window.displayIfNeeded()
+    let oldTop = view.lineRect(at: view.offset(line: 9, column: 0))!.minY + view.textContainerOrigin.y - host.contentView.bounds.minY
+    let changed = externalBase.replacingOccurrences(of: "row 22 한글 😀", with: String(repeating: "수정된 긴 원고 😀 ", count: 35))
+    view.applyExternalText(changed, undoable: undoable)
+    window.displayIfNeeded()
+    let newTop = view.lineRect(at: view.offset(line: 9, column: 0))!.minY + view.textContainerOrigin.y - host.contentView.bounds.minY
+    expect(abs(oldTop - newTop) < 1, "external edit preserves partially visible row 10 (undoable=\(undoable))")
+    expect(view.line(at: view.selectedRange().location) == 23, "external edit retains cursor on row 24")
+    if undoable {
+        view.undoManager?.undo()
+        expect(view.string == externalBase, "inline AI edit remains undoable")
+    }
+}
+view.load(externalBase)
+view.applyDisplayStyle(.init(fontName: "Menlo", fontSize: 14, lineHeightMultiple: 1, letterSpacing: 0))
+window.displayIfNeeded()
+view.setSelectedRange(NSRange(location: view.offset(line: 23, column: 0), length: 0))
+view.restoreCursorViewportAnchor(.init(offset: view.offset(line: 9, column: 0), screenY: 0))
+window.displayIfNeeded()
+view.applyExternalText("inserted 😀\n" + externalBase)
+window.displayIfNeeded()
+let movedTop = view.lineRect(at: view.offset(line: 10, column: 0))!.minY + view.textContainerOrigin.y - host.contentView.bounds.minY
+expect(abs(movedTop) < 1, "insertion above viewport keeps original first visible text at top")
+// Reestablish the pending operation for the detach check below.
+events.removeAll()
+view.toolBridge.perform(custom) { true }
+window.contentView = NSView()
+expect(events.last?.phase == .ended && events.last?.outcome == .cancelled, "detaching a tab cancels pending layout completion")
+expect(view.textLayoutManager === manager, "all toolbar tools retain TextKit 2")
+print("EDITOR TOOL REGRESSION COMPLETED")
+'''
+with tempfile.TemporaryDirectory(prefix='textlink-tool-tests-') as directory:
+    directory = Path(directory)
+    main = directory / 'main.swift'
+    main.write_text(prefix + harness)
+    executable = directory / 'test'
+    subprocess.run(['swiftc', '-O', *map(str, sources), str(main), '-o', str(executable)], check=True)
+    subprocess.run([str(executable)], check=True)

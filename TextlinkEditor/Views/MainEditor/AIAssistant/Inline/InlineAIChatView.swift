@@ -7,6 +7,7 @@ struct InlineAIChatView: View {
     let revision: ManuscriptRevision
     let onClose: () -> Void
     @State private var draft = ""
+    @State private var shortcuts = KeyboardShortcutManager.shared
     @State private var assistant = AIAssistantViewModel.shared
     @FocusState private var focused: Bool
     @Environment(\.openWindow) private var openWindow
@@ -29,10 +30,12 @@ struct InlineAIChatView: View {
                     Button { openWindow(id: "settings") } label: { Image(systemName: "gearshape") }
                         .help(L10n.get("ai.inline.settings"))
                 }
-                Button(action: onClose) { Image(systemName: "xmark") }.help(L10n.get("common.close"))
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .help(L10n.get("common.close"))
+                    .keyboardShortcut(shortcuts.binding(for: ShortcutAction(rawValue: "ai.inline"))?.keyboardShortcut)
             }
             .buttonStyle(.borderless)
-            if let error = assistant.errorMessage {
+            if let error = assistant.inlineErrorMessage {
                 Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
             }
         }
@@ -40,7 +43,7 @@ struct InlineAIChatView: View {
         .background(ThemeAwareBackground(material: .sidebar, blendingMode: .withinWindow, tintOpacity: 0.22))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.35)))
-        .onAppear { focused = true }
+        .onAppear { assistant.inlineErrorMessage = nil; focused = true }
     }
 
     private func send() {

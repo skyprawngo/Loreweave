@@ -16,6 +16,7 @@ struct TestEditorTab { var url: URL; var title: String }
     static let shared = EditorTabManager()
     var selectedTab: TestEditorTab?
     func flushEditor() {}
+    func prepareForAIWorkspaceEdit(project: URL) throws {}
     func isModified(url: URL) -> Bool { false }
     func getCachedContent(for url: URL) -> String? { nil }
 }
@@ -27,6 +28,23 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
 
 @main struct AIRegression {
     @MainActor static func main() async throws {
+        if CommandLine.arguments.contains("--live-workspace") {
+            let project = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkEditor-Live-" + UUID().uuidString + ".weaveproj")
+            try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: project) }
+            let file = project.appendingPathComponent("draft.md")
+            try "첫 번째 행\n2".write(to: file, atomically: true, encoding: .utf8)
+            let id = UUID(), before = try AIWorkspaceEdits.prepare(id: UUID(), project: project)
+            let result = try await CLIProcessManager().sendPrompt("Edit only draft.md in this temporary QA project. Read it, replace its last line 2 with 새로운문장, save preserving the first line and no trailing newline, then read the saved file to verify. Do not change any other file. Reply briefly.", cliType: .chatgpt, workingDirectory: project, allowsWorkspaceEdits: true) { _ in }
+            try AIWorkspaceEdits.finish(id: id, before: before, project: project)
+            let actual = try String(contentsOf: file, encoding: .utf8)
+            guard actual == "첫 번째 행\n새로운문장",
+                  AIWorkspaceEdits.load(id: id, project: project)?.changes.first?.after == actual else {
+                fatalError("Live workspace edit failed: " + result.response)
+            }
+            print("PASS live Codex workspace edit, exact saved bytes, persisted before/after comparison")
+            return
+        }
         var assertions = 0
         func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
             precondition(condition(), message)
@@ -183,19 +201,30 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         let replacementJSON = String(decoding: try JSONSerialization.data(withJSONObject: ["replacement":"검정"]), as: UTF8.self)
         let editJSON = String(decoding: try JSONSerialization.data(withJSONObject: ["type":"result", "subtype":"success", "result":replacementJSON]), as: UTF8.self)
         try fixture("cat >/dev/null\nprintf '%s\\n' '" + editJSON + "'\n")
-        vm.sendMessage(inlineInput: "검정으로 수정", inlineRevision: edit)
+        vm.errorMessage = "existing sidebar error"
+        vm.sendMessage(continueFromCardId: sidebarConversation, inlineInput: "검정으로 수정", inlineRevision: edit)
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
         expect(fullText == (editBase as NSString).replacingCharacters(in: NSRange(location: 0, length: 5), with: "검정"), "inline edit executes replacement on captured range")
         expect(vm.messages.last?.kind == "inlineEdit" && vm.messages.last?.outcome == "completed", "inline edit records applied outcome separately")
         expect(ChatHistoryManager.shared.loadSession(from: b)?.messages.last?.kind == "inlineEdit", "inline category survives history persistence")
+        let firstEditConversation = vm.messages.last!.conversationId
+        expect(firstEditConversation != sidebarConversation, "inline edit always creates a new history conversation")
+        expect(vm.selectedCardId == sidebarConversation && vm.inputText == "keep sidebar draft", "automatic edit does not display a new sidebar answer or replace its draft")
+        expect(vm.errorMessage == "existing sidebar error", "inline success leaves sidebar errors unchanged")
         let beforeStale = vm.messages.count
         vm.sendMessage(inlineInput: "stale edit", inlineRevision: edit)
         expect(vm.messages.count == beforeStale && !vm.isProcessing, "stale inline target prevents dispatch")
+        expect(vm.inlineErrorMessage != nil && vm.errorMessage == "existing sidebar error", "preflight error stays in inline input")
         fullText = editBase
         try fixture("cat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ordinary chat is not an edit\"}'\n")
         vm.sendMessage(inlineInput: "invalid result", inlineRevision: edit)
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
         expect(fullText == editBase && vm.messages.last?.outcome == "failed", "conversational response cannot overwrite manuscript")
+        expect(vm.messages.last?.conversationId != firstEditConversation, "each inline edit has an independent history entry")
+        expect(vm.selectedCardId == sidebarConversation && vm.inputText == "keep sidebar draft", "failed inline edit preserves sidebar conversation and draft")
+        expect(vm.errorMessage == "existing sidebar error" && vm.inlineErrorMessage == nil, "accepted inline failure appears only in history")
+        expect(vm.messages.last?.content.contains("ordinary chat is not an edit") == true, "failed edit retains original AI response in history")
+        expect(ChatHistoryManager.shared.loadSession(from: b)?.messages.last?.content == vm.messages.last?.content, "failed AI response survives persistence")
         let orphan = UUID()
         try AIContextSelection.shared.persist(manifest, requestID: orphan, projectURL: b)
         vm.clearHistory()
@@ -210,6 +239,53 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(!vm.isProcessing && vm.messages.isEmpty, "artifact preparation failure prevents dispatch")
         let residual = try FileManager.default.contentsOfDirectory(at: c.appendingPathComponent(".C.weavedata/ai-context"), includingPropertiesForKeys: nil)
         expect(residual.isEmpty, "failed revision preparation cleans already persisted manifest")
+        let workspace = folder.appendingPathComponent("Workspace.weaveproj")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let workspaceManuscript = workspace.appendingPathComponent("draft.md")
+        let removed = workspace.appendingPathComponent("removed.txt")
+        try "first\n2".write(to: workspaceManuscript, atomically: true, encoding: .utf8)
+        try "remove me".write(to: removed, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: workspace.appendingPathComponent("outside.md"), withDestinationURL: executable)
+        let editID = UUID(), before = try AIWorkspaceEdits.prepare(id: UUID(), project: workspace)
+        expect(before.count == 2, "snapshot excludes symlinks and metadata")
+        let codexExecutable = folder.appendingPathComponent("codex")
+        UserSettings.shared.path = codexExecutable
+        func codexFixture(_ body: String) throws {
+            try ("#!/bin/sh\nprintf '%s\n' \"$@\" > arguments.log\ncat >/dev/null\n" + body).write(to: codexExecutable, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codexExecutable.path)
+        }
+        try codexFixture("printf 'first\\n새로운문장' > draft.md\nprintf 'created' > new.md\nrm removed.txt\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Explanation, not workspaceManuscript text\"}}' '{\"type\":\"turn.completed\"}'\n")
+        _ = try await manager.sendPrompt("edit", cliType: .chatgpt, workingDirectory: workspace, allowsWorkspaceEdits: true) { _ in }
+        let arguments = try String(contentsOf: workspace.appendingPathComponent("arguments.log"), encoding: .utf8)
+        expect(arguments.contains("workspace-write") && arguments.contains(workspace.path) && !arguments.contains("danger-full-access"), "normal Codex explicitly bounds workspace writing")
+        try AIWorkspaceEdits.finish(id: editID, before: before, project: workspace)
+        let edits = AIWorkspaceEdits.load(id: editID, project: workspace)!
+        expect(edits.changes.count == 3, "created, deleted and edited files recorded")
+        let changed = edits.changes.first { $0.relativePath == "draft.md" }!
+        expect(changed.before == "first\n2" && changed.after == "first\n새로운문장", "comparison uses disk revisions, not response prose")
+        expect(edits.changes.first { $0.relativePath == "removed.txt" }?.after == nil, "deleted file retains original")
+        expect(edits.changes.first { $0.relativePath == "new.md" }?.before == nil, "created file retains absent baseline")
+        try codexFixture("printf '%s\\n' '{\"type\":\"turn.completed\"}'\n")
+        _ = try await manager.sendPrompt("inline", cliType: .chatgpt, workingDirectory: workspace) { _ in }
+        expect(try! String(contentsOf: workspace.appendingPathComponent("arguments.log"), encoding: .utf8).contains("read-only"), "inline/default CLI remains read-only")
+        let failedID = UUID(), failedBefore = try AIWorkspaceEdits.snapshot(project: workspace)
+        try codexFixture("printf 'partial' > draft.md\nexit 7\n")
+        do { _ = try await manager.sendPrompt("fail after write", cliType: .chatgpt, workingDirectory: workspace, allowsWorkspaceEdits: true) { _ in }; preconditionFailure("expected failure") } catch {}
+        try AIWorkspaceEdits.finish(id: failedID, before: failedBefore, project: workspace)
+        expect(AIWorkspaceEdits.load(id: failedID, project: workspace)?.changes.first?.after == "partial", "partial writes remain comparable after process failure")
+        let cancelledID = UUID(), cancelledBefore = try AIWorkspaceEdits.snapshot(project: workspace)
+        try codexFixture("printf 'cancelled write' > draft.md\nexec /bin/sleep 30\n")
+        let pendingEdit = Task { try await manager.sendPrompt("cancel after write", cliType: .chatgpt, workingDirectory: workspace, allowsWorkspaceEdits: true) { _ in } }
+        for _ in 0..<100 {
+            if (try? String(contentsOf: workspaceManuscript, encoding: .utf8)) == "cancelled write" { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        pendingEdit.cancel()
+        do { _ = try await pendingEdit.value; preconditionFailure("expected cancellation") } catch {}
+        try AIWorkspaceEdits.finish(id: cancelledID, before: cancelledBefore, project: workspace)
+        expect(AIWorkspaceEdits.load(id: cancelledID, project: workspace)?.changes.first?.after == "cancelled write", "partial writes remain comparable after cancellation")
+        try ManuscriptRevisionBridge.remove(id: editID, project: workspace)
+        expect(!AIWorkspaceEdits.exists(id: editID, project: workspace), "history cleanup removes actual revision records")
         print("AI regression passed: \(assertions) assertions (fixtures only)")
     }
 }

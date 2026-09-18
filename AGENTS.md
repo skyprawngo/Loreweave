@@ -23,6 +23,8 @@ TextlinkEditor는 `.weaveproj` 폴더 안에 원고와 창작 자료를 저장�
 - 한글·일본어 IME 조합은 일반 문자열 치환과 다르다. 입력·탭 전환·Undo 수정은 조합 상태와 AppKit responder chain을 함께 살핀다.
 - AI의 앱 UI, 프롬프트 템플릿, 외부 CLI 실행은 별도 계층이다. UI에 제공자 이름이 있다는 사실은 설치·인증·응답 호환성의 증거가 아니다.
 
+새 에디터 도구는 `TextlinkEditor/Services/Core/EditorToolRegistry.swift`의 공통 등록부에 실행 처리와 메타데이터를 함께 선언한다. 설정 단축키 목록이나 개별 뷰에 고정 키를 따로 추가하지 않는다. 등록과 실행 경계는 [Core](TextlinkEditor/Services/Core/claude.md)에 있다.
+
 ## 검증과 문서
 
 2026-09-11의 검토보고서 두 개와 체크리스트는 해당 시점의 기록이며 현재 코드의 완료 증거가 아니다. 변경 영역에 맞는 검증을 선택하고 정적 확인, 빌드, 실제 앱 동작을 구분한다. 원고 저장·IME·외부 CLI의 동작은 소스 확인만으로 입증되지 않는다.

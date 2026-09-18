@@ -21,6 +21,7 @@ final class AIAssistantViewModel {
     var selectedCardId: UUID?
     var includeCurrentDocument = false
     var errorMessage: String?
+    var inlineErrorMessage: String?
     private var historyLoadFailed = false
     private var projectFolderURL: URL?
     private var cardSessionIds: [UUID: String] = [:]
@@ -56,6 +57,7 @@ final class AIAssistantViewModel {
         inputText = ""
         includeCurrentDocument = false
         errorMessage = nil
+        inlineErrorMessage = nil
         if let url, case .connected(let type) = connectionState { loadHistory(type, url: url) }
     }
 
@@ -151,21 +153,26 @@ final class AIAssistantViewModel {
     }
 
     func sendMessage(continueFromCardId: UUID? = nil, inlineInput: String? = nil, inlineRevision: ManuscriptRevision? = nil) {
+        func reportPreparationError(_ message: String) {
+            if inlineRevision != nil { inlineErrorMessage = message }
+            else { errorMessage = message }
+        }
         let requestInput = inlineInput ?? inputText
         let attachDocument = inlineInput == nil && includeCurrentDocument
         guard !isProcessing, !requestInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               case .connected(let type) = connectionState else { return }
         if type == .chatgpt && chatGPTAccount.account == nil { connectionState = .ready(type); return }
-        guard let projectURL = projectFolderURL else { errorMessage = L10n.get("ai.error.noProject"); return }
+        guard let projectURL = projectFolderURL else { reportPreparationError(L10n.get("ai.error.noProject")); return }
         guard !UserSettings.shared.aiTerminalMode else {
-            errorMessage = CLIProcessManager.CLIError.terminalUnavailable.localizedDescription
+            reportPreparationError(CLIProcessManager.CLIError.terminalUnavailable.localizedDescription)
             return
         }
-        guard !historyLoadFailed else { errorMessage = L10n.get("ai.error.historyLoadFailed"); return }
-        errorMessage = nil
+        guard !historyLoadFailed else { reportPreparationError(L10n.get("ai.error.historyLoadFailed")); return }
+        if inlineRevision != nil { inlineErrorMessage = nil }
+        else { errorMessage = nil }
         let id = UUID()
         let userId = UUID()
-        let conversationId = continueFromCardId ?? userId
+        let conversationId = inlineRevision == nil ? (continueFromCardId ?? userId) : userId
         let assistantId = UUID()
         var requestPersisted = false
         defer { if !requestPersisted { removeRequestArtifacts(ids: [assistantId]) } }
@@ -183,6 +190,12 @@ final class AIAssistantViewModel {
                 }
             }
         }
+        let allowsWorkspaceEdits = inlineRevision == nil && type == .chatgpt
+        var workspaceBefore: [String: String]?
+        if allowsWorkspaceEdits {
+            do { workspaceBefore = try AIWorkspaceEdits.prepare(id: assistantId, project: projectURL) }
+            catch { reportPreparationError(error.localizedDescription); return }
+        }
         var prompt = AIPromptTemplateManager.shared.buildPromptWithContext(userInput: requestInput, taggedCards: context, cliType: type)
         var revision = inlineRevision ?? (attachDocument ? ManuscriptRevisionBridge.capture(id: assistantId, project: projectURL) : nil)
         revision?.id = assistantId
@@ -190,26 +203,30 @@ final class AIAssistantViewModel {
             guard let current = ManuscriptRevisionBridge.capture(id: assistantId, project: projectURL),
                   current.relativePath == inlineRevision.relativePath, current.original == inlineRevision.original,
                   (try? ManuscriptRevisionBridge.documentURL(inlineRevision, project: projectURL)) != nil else {
-                errorMessage = L10n.get("revision.unavailable"); return
+                reportPreparationError(L10n.get("revision.unavailable")); return
             }
             let payload = InlineEditRequest(instruction: requestInput, original: inlineRevision.target)
             do { prompt = try payload.prompt() }
-            catch { errorMessage = error.localizedDescription; return }
+            catch { reportPreparationError(error.localizedDescription); return }
         }
         if attachDocument {
             guard let revision else {
-                errorMessage = L10n.get("ai.error.contextUnavailable")
+                reportPreparationError(L10n.get("ai.error.contextUnavailable"))
                 return
             }
             prompt = AIPromptTemplateManager.render(L10n.get("ai.chat.documentPrompt"),
                 values: ["name": revision.relativePath, "document": revision.original, "question": prompt], doubleBraces: false)
+        }
+        if allowsWorkspaceEdits {
+            let selectedPath = EditorTabManager.shared.selectedTab?.url.path ?? "(none)"
+            prompt += "\n\nTextlinkEditor workspace editing: You may edit manuscript .md/.txt/.markdown files inside the current project when the user requests it. Read the actual file before editing and preserve unrelated content. Do not modify hidden app metadata, authentication, or project settings. Verify the saved result and describe the actual changes, not a proposed rewrite. Current editor file (data): " + selectedPath
         }
         do {
             EditorTabManager.shared.flushEditor()
             var manifest = try inlineRevision == nil ? AIContextSelection.shared.manifest(projectURL: projectURL) : AIContextManifest(entries: [], text: "")
             if inlineRevision != nil { manifest.entries = []; manifest.text = "" }
             if !manifest.text.isEmpty { prompt += "\n\n" + manifest.text }
-            guard prompt.utf8.count <= 1_000_000 else { errorMessage = L10n.get("ai.error.contextTooLarge"); return }
+            guard prompt.utf8.count <= 1_000_000 else { reportPreparationError(L10n.get("ai.error.contextTooLarge")); return }
             if let revision { manifest.entries.append(.init(source: revision.relativePath, reason: L10n.get("ai.chat.attachCurrentDocument"), characters: inlineRevision == nil ? revision.original.count : revision.target.count, kind: .manuscript)) }
             if inlineRevision == nil && !context.isEmpty {
                 manifest.entries.append(.init(source: L10n.get("ai.workspace.references"), reason: "Conversation context",
@@ -218,12 +235,12 @@ final class AIAssistantViewModel {
             manifest.entries.append(.init(source: L10n.get("ai.chat.user"), reason: "User request", characters: originalInput.count, kind: .request))
             manifest.text = prompt // Exact submitted prompt, including document, references and user request.
             try AIContextSelection.shared.persist(manifest, requestID: assistantId, projectURL: projectURL)
-        } catch { errorMessage = error.localizedDescription; return }
+        } catch { reportPreparationError(error.localizedDescription); return }
         if let revision {
             do { try ManuscriptRevisionBridge.save(revision, project: projectURL) }
-            catch { errorMessage = error.localizedDescription; return }
+            catch { reportPreparationError(error.localizedDescription); return }
         }
-        guard prompt.utf8.count <= 1_000_000 else { errorMessage = L10n.get("ai.error.contextTooLarge"); return }
+        guard prompt.utf8.count <= 1_000_000 else { reportPreparationError(L10n.get("ai.error.contextTooLarge")); return }
         messages.append(AIMessage(id: userId, role: .user, content: originalInput, conversationId: conversationId, kind: inlineRevision == nil ? nil : "inlineEdit"))
         messages.append(AIMessage(id: assistantId, role: .assistant, content: "", isStreaming: true, conversationId: conversationId, kind: inlineRevision == nil ? nil : "inlineEdit"))
         guard persist() else { messages.removeLast(2); return }
@@ -236,9 +253,18 @@ final class AIAssistantViewModel {
         requestId = id
         requestTask = Task { [weak self] in
             guard let self else { return }
+            // Reconcile partial writes on failure/cancellation too, always into the captured project.
+            defer {
+                if let workspaceBefore,
+                   (try? AIContextSelection.shared.savedRequestIDs(projectURL: projectURL).contains(assistantId)) == true {
+                    do { try AIWorkspaceEdits.finish(id: assistantId, before: workspaceBefore, project: projectURL) }
+                    catch { if projectFolderURL == projectURL { errorMessage = error.localizedDescription } }
+                }
+            }
+            var receivedResponse: String?
             do {
                 let result = try await processManager.sendPrompt(prompt, cliType: type, workingDirectory: projectURL,
-                                                                 sessionId: existingSession) { [weak self] chunk in
+                                                                 sessionId: existingSession, allowsWorkspaceEdits: allowsWorkspaceEdits) { [weak self] chunk in
                     guard let self, requestId == id, projectFolderURL == projectURL,
                           let index = messages.firstIndex(where: { $0.id == assistantId }) else { return }
                     let old = messages[index]
@@ -247,6 +273,7 @@ final class AIAssistantViewModel {
                 }
                 guard requestId == id, projectFolderURL == projectURL, !Task.isCancelled else { return }
                 if let session = result.sessionId { cardSessionIds[conversationId] = session }
+                receivedResponse = result.response
                 if let inlineRevision {
                     let replacement = try InlineEditRequest.replacement(from: result.response)
                     try ManuscriptRevisionBridge.apply(inlineRevision, proposal: replacement,
@@ -257,10 +284,15 @@ final class AIAssistantViewModel {
                 }
             } catch {
                 guard requestId == id, projectFolderURL == projectURL else { return }
-                errorMessage = error.localizedDescription
+                // Accepted inline requests report only in their own history entry.
+                // Never replace the unrelated sidebar conversation's error or draft.
+                if inlineRevision == nil { errorMessage = error.localizedDescription }
                 // Keep the prompt available for editing/retry without dropping its persisted failed turn.
                 if inlineInput == nil { inputText = originalInput }
-                finish(assistantId, content: error.localizedDescription, outcome: "failed")
+                let response = receivedResponse ?? messages.first(where: { $0.id == assistantId })?.content ?? ""
+                let failureRecord = inlineRevision != nil && !response.isEmpty
+                    ? error.localizedDescription + "\n\n" + response : error.localizedDescription
+                finish(assistantId, content: failureRecord, outcome: "failed")
             }
         }
     }

@@ -12,89 +12,64 @@ import Carbon.HIToolbox
 // MARK: - Shortcut Action
 
 /// 단축키로 실행할 수 있는 액션 목록
-enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
-    // 파일 관련
-    case newFile = "file.new"
-    case newFolder = "file.newFolder"
-    case openFile = "file.open"
-    case save = "file.save"
-    case saveAs = "file.saveAs"
-    case closeTab = "file.closeTab"
-    case closeAllTabs = "file.closeAllTabs"
-
-    // 편집 관련
-    case undo = "edit.undo"
-    case redo = "edit.redo"
-    case cut = "edit.cut"
-    case copy = "edit.copy"
-    case paste = "edit.paste"
-    case selectAll = "edit.selectAll"
-    case find = "edit.find"
-    case findAndReplace = "edit.findAndReplace"
-    case moveLineUp = "edit.moveLineUp"
-    case moveLineDown = "edit.moveLineDown"
-    case duplicateLineUp = "edit.duplicateLineUp"
-    case duplicateLineDown = "edit.duplicateLineDown"
-    case deleteWordBackward = "edit.deleteWordBackward"
-    case deleteToLineStart = "edit.deleteToLineStart"
-
-    // 보기 관련
-    case toggleSidebar = "view.toggleSidebar"
-    case toggleAIPanel = "view.toggleAIPanel"
-    case zoomIn = "view.zoomIn"
-    case zoomOut = "view.zoomOut"
-    case resetZoom = "view.resetZoom"
-
-    // 탭 네비게이션
-    case nextTab = "tab.next"
-    case previousTab = "tab.previous"
-    case goToTab1 = "tab.goTo1"
-    case goToTab2 = "tab.goTo2"
-    case goToTab3 = "tab.goTo3"
-    case goToTab4 = "tab.goTo4"
-    case goToTab5 = "tab.goTo5"
-    case goToTab6 = "tab.goTo6"
-    case goToTab7 = "tab.goTo7"
-    case goToTab8 = "tab.goTo8"
-    case goToTab9 = "tab.goTo9"
-
-    // AI 관련
-    case aiContinueWriting = "ai.continueWriting"
-    case aiRefine = "ai.refine"
-    case aiSummarize = "ai.summarize"
-
-    // 프로젝트 관련
-    case openProject = "project.open"
-    case newProject = "project.new"
-    case refreshProject = "project.refresh"
+struct ShortcutAction: RawRepresentable, Hashable, Identifiable, Codable {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    init(from decoder: Decoder) throws { rawValue = try decoder.singleValueContainer().decode(String.self) }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+    static let newFile = Self(rawValue: "file.new")
+    static let newFolder = Self(rawValue: "file.newFolder")
+    static let openFile = Self(rawValue: "file.open")
+    static let save = Self(rawValue: "file.save")
+    static let saveAs = Self(rawValue: "file.saveAs")
+    static let closeTab = Self(rawValue: "file.closeTab")
+    static let closeAllTabs = Self(rawValue: "file.closeAllTabs")
+    static let undo = Self(rawValue: "edit.undo")
+    static let redo = Self(rawValue: "edit.redo")
+    static let cut = Self(rawValue: "edit.cut")
+    static let copy = Self(rawValue: "edit.copy")
+    static let paste = Self(rawValue: "edit.paste")
+    static let selectAll = Self(rawValue: "edit.selectAll")
+    static let find = Self(rawValue: "edit.find")
+    static let findAndReplace = Self(rawValue: "edit.findAndReplace")
+    static let moveLineUp = Self(rawValue: "edit.moveLineUp")
+    static let moveLineDown = Self(rawValue: "edit.moveLineDown")
+    static let duplicateLineUp = Self(rawValue: "edit.duplicateLineUp")
+    static let duplicateLineDown = Self(rawValue: "edit.duplicateLineDown")
+    static let deleteWordBackward = Self(rawValue: "edit.deleteWordBackward")
+    static let deleteToLineStart = Self(rawValue: "edit.deleteToLineStart")
+    static let toggleSidebar = Self(rawValue: "view.toggleSidebar")
+    static let toggleAIPanel = Self(rawValue: "view.toggleAIPanel")
+    static let zoomIn = Self(rawValue: "view.zoomIn")
+    static let zoomOut = Self(rawValue: "view.zoomOut")
+    static let resetZoom = Self(rawValue: "view.resetZoom")
+    static let nextTab = Self(rawValue: "tab.next")
+    static let previousTab = Self(rawValue: "tab.previous")
+    static let goToTab1 = Self(rawValue: "tab.goTo1")
+    static let goToTab2 = Self(rawValue: "tab.goTo2")
+    static let goToTab3 = Self(rawValue: "tab.goTo3")
+    static let goToTab4 = Self(rawValue: "tab.goTo4")
+    static let goToTab5 = Self(rawValue: "tab.goTo5")
+    static let goToTab6 = Self(rawValue: "tab.goTo6")
+    static let goToTab7 = Self(rawValue: "tab.goTo7")
+    static let goToTab8 = Self(rawValue: "tab.goTo8")
+    static let goToTab9 = Self(rawValue: "tab.goTo9")
+    static let aiContinueWriting = Self(rawValue: "ai.continueWriting")
+    static let aiRefine = Self(rawValue: "ai.refine")
+    static let aiSummarize = Self(rawValue: "ai.summarize")
+    static let openProject = Self(rawValue: "project.open")
+    static let newProject = Self(rawValue: "project.new")
+    static let refreshProject = Self(rawValue: "project.refresh")
 
     var id: String { rawValue }
-
-    /// 액션 카테고리
     var category: ShortcutCategory {
-        switch self {
-        case .newFile, .newFolder, .openFile, .save, .saveAs, .closeTab, .closeAllTabs:
-            return .file
-        case .undo, .redo, .cut, .copy, .paste, .selectAll, .find, .findAndReplace,
-             .moveLineUp, .moveLineDown, .duplicateLineUp, .duplicateLineDown,
-             .deleteWordBackward, .deleteToLineStart:
-            return .edit
-        case .toggleSidebar, .toggleAIPanel, .zoomIn, .zoomOut, .resetZoom:
-            return .view
-        case .nextTab, .previousTab, .goToTab1, .goToTab2, .goToTab3, .goToTab4,
-             .goToTab5, .goToTab6, .goToTab7, .goToTab8, .goToTab9:
-            return .tab
-        case .aiContinueWriting, .aiRefine, .aiSummarize:
-            return .ai
-        case .openProject, .newProject, .refreshProject:
-            return .project
-        }
+        if let tool = EditorToolRegistry.definition(rawValue) { return ShortcutCategory(rawValue: tool.category.rawValue) ?? .edit }
+        return ShortcutCategory(rawValue: String(rawValue.split(separator: ".").first ?? "edit")) ?? .edit
     }
-
-    /// 액션 표시 이름
-    var displayName: String {
-        L10n.get("shortcut.\(rawValue)")
-    }
+    var displayName: String { L10n.get(EditorToolRegistry.definition(rawValue)?.titleKey ?? "shortcut.\(rawValue)") }
 }
 
 // MARK: - Shortcut Category
@@ -160,6 +135,7 @@ struct ShortcutBinding: Codable, Identifiable, Equatable {
 
     /// 표시용 문자열 (예: "⌘N")
     var displayString: String {
+        if key.isEmpty { return "—" }
         let keyDisplay = key.count == 1 ? key.uppercased() : key.capitalized
         return "\(modifiers.displayString)\(keyDisplay)"
     }
@@ -229,7 +205,11 @@ final class KeyboardShortcutManager {
         return appFolder.appendingPathComponent("shortcuts.json")
     }
 
+    private var registrationObserver: NSObjectProtocol?
     private init() {
+        registrationObserver = NotificationCenter.default.addObserver(forName: EditorToolRegistry.didRegister, object: nil, queue: .main) { [weak self] _ in
+            self?.mergeRegisteredTools()
+        }
         loadShortcuts()
     }
 
@@ -283,16 +263,31 @@ final class KeyboardShortcutManager {
             ShortcutBinding(action: .goToTab8, key: "8", modifiers: .command, isEnabled: true),
             ShortcutBinding(action: .goToTab9, key: "9", modifiers: .command, isEnabled: true),
 
-            // AI
-            ShortcutBinding(action: .aiContinueWriting, key: "return", modifiers: [.command, .shift], isEnabled: true),
-            ShortcutBinding(action: .aiRefine, key: "r", modifiers: [.command, .shift], isEnabled: true),
-            ShortcutBinding(action: .aiSummarize, key: "u", modifiers: [.command, .shift], isEnabled: true),
 
             // 프로젝트
             ShortcutBinding(action: .openProject, key: "o", modifiers: [.command, .shift], isEnabled: true),
             ShortcutBinding(action: .newProject, key: "n", modifiers: [.command, .option], isEnabled: true),
             ShortcutBinding(action: .refreshProject, key: "r", modifiers: .command, isEnabled: true),
-        ]
+        ] + EditorToolRegistry.tools.map { tool in
+            var modifiers: ModifierKeys = []
+            if tool.modifiers.contains(.command) { modifiers.insert(.command) }
+            if tool.modifiers.contains(.option) { modifiers.insert(.option) }
+            if tool.modifiers.contains(.shift) { modifiers.insert(.shift) }
+            if tool.modifiers.contains(.control) { modifiers.insert(.control) }
+            return ShortcutBinding(action: ShortcutAction(rawValue: tool.id), key: tool.key, modifiers: modifiers, isEnabled: true)
+        }
+    }
+
+    private func mergeRegisteredTools() {
+        var known = Set(bindings.map(\.action))
+        for var binding in Self.defaultBindings where known.insert(binding.action).inserted {
+            // Newly introduced defaults must not steal an existing custom binding.
+            if !binding.key.isEmpty, findConflict(key: binding.key, modifiers: binding.modifiers, excluding: binding.action) != nil {
+                binding.key = ""
+                binding.modifiers = []
+            }
+            bindings.append(binding)
+        }
     }
 
     // MARK: - Load & Save
@@ -305,13 +300,7 @@ final class KeyboardShortcutManager {
                 let decoder = JSONDecoder()
                 bindings = try decoder.decode([ShortcutBinding].self, from: data)
 
-                // 새로 추가된 액션이 있으면 기본값으로 추가
-                let existingActions = Set(bindings.map { $0.action })
-                for defaultBinding in Self.defaultBindings {
-                    if !existingActions.contains(defaultBinding.action) {
-                        bindings.append(defaultBinding)
-                    }
-                }
+                mergeRegisteredTools()
             } catch {
                 print("Failed to load shortcuts: \(error)")
                 bindings = Self.defaultBindings
@@ -386,7 +375,8 @@ final class KeyboardShortcutManager {
 
     /// 단축키 충돌 확인
     func findConflict(key: String, modifiers: ModifierKeys, excluding action: ShortcutAction) -> ShortcutBinding? {
-        bindings.first { binding in
+        guard !key.isEmpty else { return nil }
+        return bindings.first { binding in
             binding.action != action &&
             binding.isEnabled &&
             Self.canonicalKey(binding.key) == Self.canonicalKey(key) &&
@@ -417,7 +407,7 @@ final class KeyboardShortcutManager {
         if event.modifierFlags.contains(.option) { modifiers.insert(.option) }
         if event.modifierFlags.contains(.control) { modifiers.insert(.control) }
         if event.modifierFlags.contains(.shift) { modifiers.insert(.shift) }
-        return bindings.first { $0.isEnabled && Self.canonicalKey($0.key) == key && $0.modifiers == modifiers }?.action
+        return bindings.first { !$0.key.isEmpty && $0.isEnabled && Self.canonicalKey($0.key) == key && $0.modifiers == modifiers }?.action
     }
 
     /// Use the same named keys/aliases accepted by KeyEquivalent when matching AppKit events.

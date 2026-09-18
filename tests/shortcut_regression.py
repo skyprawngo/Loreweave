@@ -11,7 +11,7 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 source = (root / 'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text()
 start = source.index('    private var shortcutsFileURL: URL {')
-end = source.index('    private init()', start)
+end = source.index('    private var registrationObserver', start)
 source = source[:start] + '''    private var shortcutsFileURL: URL {
         URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("shortcuts.json")
     }
@@ -68,6 +68,31 @@ expect(manager.findConflict(key: "escape", modifiers: [.control, .option, .comma
 manager.resetToDefault(for: .moveLineUp)
 expect(manager.action(matching: event(126, "\u{f700}", .option)) == .moveLineUp, "reset restores default")
 expect(FileManager.default.fileExists(atPath: URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("shortcuts.json").path), "all persistence uses temp directory")
+let inline = ShortcutAction(rawValue: "ai.inline")
+expect(manager.action(matching: event(34, "i", [.command, .option])) == inline, "registered inline tool supplies default shortcut")
+manager.setKey("l", modifiers: [.command, .control], for: inline)
+expect(manager.action(matching: event(34, "i", [.command, .option])) == nil, "inline old key is removed after reassignment")
+expect(manager.action(matching: event(37, "l", [.command, .control])) == inline, "inline uses customized key")
+manager.toggleEnabled(for: inline)
+expect(manager.action(matching: event(37, "l", [.command, .control])) == nil, "inline disabled key does not match")
+expect(EditorToolRegistry.tools.allSatisfy { manager.binding(for: ShortcutAction(rawValue: $0.id)) != nil }, "every registered tool appears in settings source even without a key")
+let future = EditorToolRegistry.tool("future.example", "future.title", .edit, .text) { $0.toolFormat("bold") }
+EditorToolRegistry.register(future)
+let futureID = ShortcutAction(rawValue: future.id)
+expect(manager.binding(for: futureID)?.key == "", "one tool registration automatically adds unassigned shortcut row")
+expect(futureID.displayName == "future.title", "registered title is used without settings switch")
+manager.setKey("9", modifiers: [.command, .option], for: futureID)
+manager.loadShortcuts()
+expect(manager.action(matching: event(25, "9", [.command, .option])) == futureID, "new tool customization persists and routes without action enum changes")
+let unknown = ShortcutBinding(action: ShortcutAction(rawValue: "future.uninstalled"), key: "x", modifiers: .control, isEnabled: false)
+let persisted = try! JSONEncoder().encode([manager.binding(for: .moveLineUp)!, unknown])
+let persistedURL = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("shortcuts.json")
+try! persisted.write(to: persistedURL)
+manager.loadShortcuts()
+expect(manager.binding(for: unknown.action) == unknown, "unknown future IDs round trip without resetting user settings")
+expect(manager.binding(for: futureID) != nil, "loading old settings merges new tools")
+EditorToolRegistry.register(EditorToolRegistry.tool("future.conflict", "future.conflict", .edit, .text, key: "s", modifiers: .command) { $0.toolFormat("italic") })
+expect(manager.binding(for: ShortcutAction(rawValue: "future.conflict"))?.key == "", "new default cannot steal existing save shortcut")
 print("ALL SHORTCUT REGRESSIONS PASSED")
 '''
 with tempfile.TemporaryDirectory(prefix='lore-shortcut-tests-') as directory:
@@ -77,5 +102,5 @@ with tempfile.TemporaryDirectory(prefix='lore-shortcut-tests-') as directory:
     main = directory / 'main.swift'
     main.write_text(harness)
     executable = directory / 'test'
-    subprocess.run(['swiftc', str(adapter), str(main), '-o', str(executable)], check=True)
+    subprocess.run(['swiftc', str(root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift'), str(adapter), str(main), '-o', str(executable)], check=True)
     subprocess.run([str(executable), str(directory)], check=True)

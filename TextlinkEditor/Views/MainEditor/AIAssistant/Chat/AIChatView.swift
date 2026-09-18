@@ -414,8 +414,9 @@ struct AIChatView: View {
     @State private var showingContext = false
     @State private var showingPreview = false
     @State private var showingReferences = false
-    @State private var revisionPresentation: AIRevisionPresentation?
+    @State private var revisionPresentation: AIWorkspaceRevision?
     @State private var revisionError = false
+    @State private var completedWorkspaceRequests = Set<UUID>()
     @State private var documentPreview: AIDocumentSnapshot?
     @State private var followsResponse = true
     @State private var historyQuery = ""
@@ -490,7 +491,10 @@ struct AIChatView: View {
                 AIContextPickerView(projectURL: project, onReviewRequested: AIAssistantViewModel.shared.prepareDraftAction)
             }
         }
-        .sheet(item: $revisionPresentation) { AIRevisionView(presentation: $0) }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aiWorkspaceFilesDidChange"))) { notification in
+            if let id = notification.userInfo?["requestID"] as? UUID { completedWorkspaceRequests.insert(id) }
+        }
+        .sheet(item: $revisionPresentation) { AIWorkspaceRevisionView(record: $0) }
         .alert(L10n.get("revision.unavailable"), isPresented: $revisionError) { Button(L10n.get("common.close")) {} }
     }
 
@@ -513,19 +517,14 @@ struct AIChatView: View {
                     } else {
                         ForEach(detailMessages) { message in
                             VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(L10n.get(message.role == .user ? "ai.chat.user" : "ai.chat.assistant"))
-                                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(message.timestamp, style: .time).font(.caption2).foregroundStyle(.tertiary)
-                                }
                                 Text(message.content).textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 if message.role == .assistant, !message.isStreaming, message.kind != "inlineEdit",
-                                   message.outcome == "completed", let project = ProjectManager.shared.currentProject?.path {
+                                   let project = ProjectManager.shared.currentProject?.path,
+                                   completedWorkspaceRequests.contains(message.id) || AIWorkspaceEdits.exists(id: message.id, project: project) {
                                     Button(L10n.get("revision.title")) {
-                                        if let revision = ManuscriptRevisionBridge.load(id: message.id, project: project) {
-                                            revisionPresentation = AIRevisionPresentation(revision: revision, proposal: message.content, project: project)
+                                        if let record = AIWorkspaceEdits.load(id: message.id, project: project) {
+                                            revisionPresentation = record
                                         } else { revisionError = true }
                                     }
                                     .buttonStyle(.borderless)
@@ -591,10 +590,8 @@ struct AIChatView: View {
             }
         }
         .padding(10)
-        .background {
-            ThemeAwareBackground(material: .sidebar, blendingMode: .withinWindow, tintOpacity: 0.22)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-        }
+        // Match the manuscript surface without mixing in the lighter assistant backdrop.
+        .background(AppColors.textEditorBackground, in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
         .padding(12)
     }
@@ -661,7 +658,6 @@ struct AIChatView: View {
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                                 Text(card.userMessage.content).lineLimit(2)
-                                Text(card.userMessage.timestamp, style: .date).font(.caption).foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                         Button(role: .destructive) { pendingDeletion = card.id } label: { Image(systemName: "trash") }

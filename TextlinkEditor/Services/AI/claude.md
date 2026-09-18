@@ -19,7 +19,7 @@ AI 프롬프트에 포함할 원고/선택/카드의 범위는 ViewModel에서 �
 
 ## 실행과 검증 경계
 
-전송 시 프로젝트 URL, request ID, conversation ID를 고정한다. 프로젝트 전환과 취소는 콜백을 먼저 무효화한다. 원고 첨부는 선택 사항이며 전송 직전 에디터를 flush한 캐시 내용으로 만든다. Claude 인증은 외부 CLI가 소유한다. ChatGPT는 `Auth/ChatGPTAccountService.swift`가 공식 App Server의 브라우저 OAuth를 시작하고 완료 ID를 검증한다. 토큰 발급·갱신은 공식 런타임, 저장은 macOS Keychain이 담당한다. TextlinkEditor 전용 Application Support/TextlinkEditor/OpenAI와 keyring 설정을 인증·AI 호출 모두에 적용하며, 전역 Codex 계정이나 API 키 환경변수를 재사용하지 않는다. App Server 계약은 `tests/oauth/run.py`, 빈 AI 입력창의 클릭/크기는 `tests/ai_input_regression.py`에서 검증한다. Claude는 safe-mode와 빈 tools, Codex는 read-only sandbox와 사용자 config/rules 제외를 요청한다. 옵션을 지원하지 않는 버전은 명시적 호환성 오류로 처리한다.
+전송 시 프로젝트 URL, request ID, conversation ID를 고정한다. 프로젝트 전환과 취소는 콜백을 먼저 무효화한다. 원고 첨부는 선택 사항이며 전송 직전 에디터를 flush한 캐시 내용으로 만든다. Claude 인증은 외부 CLI가 소유한다. ChatGPT는 `Auth/ChatGPTAccountService.swift`가 공식 App Server의 브라우저 OAuth를 시작하고 완료 ID를 검증한다. 토큰 발급·갱신은 공식 런타임, 저장은 macOS Keychain이 담당한다. TextlinkEditor 전용 Application Support/TextlinkEditor/OpenAI와 keyring 설정을 인증·AI 호출 모두에 적용하며, 전역 Codex 계정이나 API 키 환경변수를 재사용하지 않는다. App Server 계약은 `tests/oauth/run.py`, 빈 AI 입력창의 클릭/크기는 `tests/ai_input_regression.py`에서 검증한다. Claude는 safe-mode와 빈 tools를 사용한다. 일반 Codex 대화는 현재 프로젝트를 명시한 workspace-write sandbox를 사용하고, 인라인 편집은 read-only를 유지한다. 사용자 config/rules는 제외한다. 옵션을 지원하지 않는 버전은 명시적 호환성 오류로 처리한다.
 
 `tests/ai/run.sh`는 실제 서비스 대신 임시 fixture 실행 파일로 UTF-8/JSONL, 종료·인증 오류, 프로세스 그룹 취소, 프로젝트 귀속 및 대화 저장을 검증한다. 실제 CLI 로그인·서비스 응답·권한 적용은 별도 검증이다. 외부 CLI 계약 기준은 [Claude headless](https://code.claude.com/docs/en/headless), [Claude flags](https://code.claude.com/docs/en/cli-reference), [Codex non-interactive](https://developers.openai.com/codex/noninteractive/), [Codex CLI reference](https://developers.openai.com/codex/cli/reference/)다.
 
@@ -29,8 +29,10 @@ AI 프롬프트에 포함할 원고/선택/카드의 범위는 ViewModel에서 �
 
 `Context/AIContextSelection.swift`는 프로젝트별 파일·고정 선택문·공개 시점이 허용된 설정 자료를 조립한다. 수정된 열린 원고는 초안, 그 외에는 디스크를 읽는다. 명시적 참조는 256 KiB, 최종 요청은 1 MB 제한이다. 토큰 수 추정치가 아니다. 요청별 `ai-context/{assistantID}.json`에는 실제 최종 프롬프트와 출처를 보관한다.
 
-`Revision/ManuscriptRevision.swift`는 원고 첨부 요청의 전체 본문 기준본을 `ai-revisions/`에 저장한다. 비교 화면은 선택한 변경만 적용하며 현재 원고가 기준본과 같아야 한다. 적용은 활성 네이티브 에디터의 Undo 경로를 통과한다. 선택문 참조와 전체 원고 수정 기준을 혼동하지 않는다. 대화 삭제·전송 준비 실패는 연결된 문맥과 기준본도 정리한다.
+`Revision/ManuscriptRevision.swift`는 일반 Codex 실행 전 열린 초안을 충돌 검사 후 저장하고 프로젝트 원고(md/txt/markdown)의 기준본을 ai-revisions에 남긴다. 총 64 MiB를 넘거나 읽기/저장에 실패하면 실행하지 않는다. 실행 후 성공·실패·취소 모두 실제 디스크 변경 전후를 기록한다. 비교 화면은 파일 생성·삭제를 포함한 저장 결과 조회이며 AI 답변 문장을 원고로 적용하지 않는다. 실행 중 수동/외부 변경도 기록에 포함될 수 있다. 완료 알림은 활성 편집기의 외부 변경 검사를 즉시 실행하고, 수정 중인 초안과 충돌하면 덮어쓰지 않는다. 비활성 탭은 다시 열 때 디스크를 읽는다. 인라인 편집은 기존 기준본 검증과 네이티브 Undo 경로를 유지한다. 대화 삭제·전송 준비 실패는 연결된 문맥과 기준본·수정 기록도 정리한다.
 
 인라인 편집(`Views/MainEditor/AIAssistant/Inline/InlineAIChatView.swift`)은 전송 직후 닫히는 단일 지시 입력창이다. 선택한 범위가 있으면 치환하고 공백 선택 또는 커서만 있으면 해당 위치에 삽입한다. 문맥은 화면에 표시하지 않는다. `InlineEditRequest`가 JSON replacement 응답을 요구하며 앱만 기준본 비교·버전 기록·네이티브 Undo 경로를 통해 수정한다. 전송 전후 원고나 활성 문서가 바뀌면 덮어쓰지 않는다. 일반 답변이나 잘못된 JSON은 실패로 기록한다.
 
 기록의 선택 필드 `AIMessage.kind == inlineEdit`로 일반 대화와 구분한다. 예전 기록의 필드 부재는 일반 대화로 해석한다. 인라인 기록은 조회·삭제할 수 있으며 이어서 대화하거나 이미 적용된 결과를 다시 수정 비교로 적용하지 않는다. 기존 계정·단일 실행기를 공유하되 사이드바 초안·선택 대화와 공통 첨부 설정은 해당 편집 요청에 섞지 않는다.
+
+인라인 요청은 매번 새 conversation ID를 만들며 사이드 패널의 선택 대화·입력 초안·오류 표시를 바꾸지 않는다. 접수 전 오류만 인라인 입력창에 표시하고, 접수 후 응답과 실패는 해당 기록에서만 조회한다. 적용하지 못한 AI 응답도 실패 사유와 함께 보관하여 원인을 확인할 수 있게 한다.

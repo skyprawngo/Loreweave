@@ -14,7 +14,8 @@ engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
 views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
-sources += [views / 'NativeManuscriptView.swift']
+sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', views / 'NativeManuscriptView.swift']
 representable = (views / 'TextlinkEditorRepresentable.swift').read_text().split('// MARK: - Preview')[0]
 representable = representable.replace('struct TextlinkEditorRepresentable: NSViewRepresentable {', 'struct TextlinkEditorRepresentable {\n    struct Context { let coordinator: Coordinator }')
 harness = r'''
@@ -30,10 +31,15 @@ enum AppColors {
     static let nsEditorCursor = NSColor.textColor
     static let nsCurrentLineHighlight = NSColor.controlBackgroundColor
 }
-enum ShortcutAction { case moveLineUp, moveLineDown, duplicateLineUp, duplicateLineDown, deleteWordBackward, deleteToLineStart, unrelated }
+enum ShortcutAction {
+    case moveLineUp, moveLineDown, duplicateLineUp, duplicateLineDown, deleteWordBackward, deleteToLineStart, unrelated, inline
+    var rawValue: String { self == .inline ? "ai.inline" : String(describing: self) }
+}
 final class KeyboardShortcutManager {
     static let shared = KeyboardShortcutManager()
-    func action(matching event: NSEvent) -> ShortcutAction? { nil }
+    func action(matching event: NSEvent) -> ShortcutAction? {
+        event.keyCode == 34 && event.modifierFlags.intersection([.command, .option, .shift, .control]) == [.command, .option] ? .inline : nil
+    }
 }
 final class TextUndoHistoryManager {
     static let shared = TextUndoHistoryManager()
@@ -54,11 +60,11 @@ let urlA = URL(fileURLWithPath: "/tmp/a.md"), urlB = URL(fileURLWithPath: "/tmp/
 var cache: [URL: String] = [:]
 let active = Box<(UUID, URL)>((a, urlA))
 let revision = Box(UUID())
-func parent(_ id: UUID, _ url: URL) -> TextlinkEditorRepresentable {
+func parent(_ id: UUID, _ url: URL, editable: Bool = true, position: (line: Int, column: Int)? = nil) -> TextlinkEditorRepresentable {
     TextlinkEditorRepresentable(text: binding(content), cursorLine: binding(cursorLine), cursorColumn: binding(cursorColumn),
         selectedLineRange: binding(selected), externallyModifiedLines: binding(modified),
         fontSize: 14, fontName: "Menlo", lineHeightMultiple: 1.5, letterSpacing: 0,
-        isEditable: true, initialCursorPosition: nil,
+        isEditable: editable, initialCursorPosition: position,
         onContentWillChange: { url, value, _, _ in if let url { cache[url] = value } },
         documentID: id, documentURL: url,
         contentRevision: revision.value,
@@ -160,12 +166,57 @@ let staleCapture: (String, NSRange) -> Void = { _, _ in staleInvoked = true }
 active.value = (b, urlB)
 NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil, userInfo: ["captureSelection": staleCapture])
 expect(!staleInvoked, "inactive presentation cannot capture another manuscript")
+active.value = (b, urlB)
+content.value = ""
+let loading = parent(b, urlB, editable: false)
+loading.updateNSView(view, context: context)
+revision.value = UUID()
+content.value = "first\nsecond\nlast"
+let loaded = parent(b, urlB, position: (line: 2, column: 2))
+loaded.updateNSView(view, context: context)
+drain()
+expect(view.textView.selectedRange().location == 15, "asynchronous loading restores remembered cursor")
+expect(cursorLine.value == 3 && cursorColumn.value == 2, "loaded cursor publishes native position")
+expect(view.textView.textLayoutManager != nil, "tab switching and AI edits retain TextKit 2")
+
+// Count actual NSTextView snapshots: geometry-only updates must not read the
+// complete document. The temporary test source only removes `final` to observe it.
+final class SnapshotCountingView: NativeManuscriptTextView {
+    var snapshotReads = 0
+    override var string: String {
+        get { snapshotReads += 1; return super.string }
+        set { super.string = newValue }
+    }
+}
+let counting = SnapshotCountingView()
+content.value = String(repeating: "한글 장편 😀 폭 변경 검증 문장입니다.\n", count: 100000)
+counting.load(content.value)
+view.textView.delegate = nil
+view.documentView = counting
+counting.delegate = coordinator
+coordinator.editors[b] = counting
+parent(b, urlB).updateNSView(view, context: context)
+drain()
+counting.snapshotReads = 0
+for _ in 0..<100 { parent(b, urlB).updateNSView(view, context: context) }
+expect(counting.snapshotReads == 0, "100 geometry-only updates take no whole-document snapshots")
+content.value = "external replacement without a new revision"
+parent(b, urlB).updateNSView(view, context: context)
+expect(counting.string == content.value, "changed binding without revision still replaces native text")
+counting.insertText("native ", replacementRange: NSRange(location: 0, length: 0))
+drain()
+parent(b, urlB).updateNSView(view, context: context)
+expect(counting.string == content.value && counting.undoManager!.canUndo, "native publication retains text and undo with snapshot guard")
 print("EDITOR BINDING REGRESSION COMPLETED")
 '''
 with tempfile.TemporaryDirectory(prefix='lore-binding-tests-') as directory:
     directory = Path(directory)
     adapter = directory / 'Representable.swift'
     adapter.write_text(representable)
+    observable_native = directory / 'NativeManuscriptView.swift'
+    observable_native.write_text((views / 'NativeManuscriptView.swift').read_text().replace(
+        'final class NativeManuscriptTextView:', 'class NativeManuscriptTextView:', 1))
+    sources = [observable_native if path.name == 'NativeManuscriptView.swift' else path for path in sources]
     main = directory / 'main.swift'
     main.write_text(harness)
     executable = directory / 'test'

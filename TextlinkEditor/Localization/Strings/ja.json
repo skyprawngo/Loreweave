@@ -1,4 +1,10 @@
 {
+  "toolbar.boldItalic": "太字・斜体",
+  "storage.externalSaveTitle": "ファイルが外部で変更されました",
+  "storage.externalSaveMessage": "ファイルが外部で変更または削除されました。現在の編集内容を別の名前で保存しますか？",
+  "storage.saveCopy": "別名で保存",
+  "storage.externalDeleted": "外部で削除されました",
+  "storage.externalConflict": "外部の変更あり · 新しいファイルとして保存",
   "ai.workspace.returnToChat": "会話に戻る",
   "app.name": "TextlinkEditor",
   "sidebar.project": "プロジェクト",
@@ -373,7 +379,7 @@
   "ai.chat.documentPrompt": "添付原稿（{name}）:\n{document}\n\nユーザーの質問:\n{question}",
   "ai.chat.cancelled": "リクエストをキャンセルしました。",
   "ai.chat.attachCurrentDocument": "現在の原稿を添付",
-  "ai.chat.contextDisclosure": "選択した原稿と参照会話を送信します。Codexはプロジェクトを読み取れますが変更できません。",
+  "ai.chat.contextDisclosure": "選択した原稿と参照会話を送信します。Codexは依頼に応じてプロジェクトの原稿を編集・保存できます。",
   "ai.chat.connectedHint": "CLIのインストールを確認しました。認証状態は最初のリクエストで確認します。",
   "ai.error.authentication": "CLIの認証が必要です。ターミナルで選択したCLIにログインしてから再試行してください。",
   "ai.error.incompatibleCLI": "インストール済みCLIは必要な実行オプションをサポートしていません。公式ガイドに従って更新してから再試行してください。",
@@ -587,5 +593,10 @@
   "ai.inline.allHistory": "すべて",
   "ai.inline.chatHistory": "通常の会話",
   "ai.inline.applied": "原稿に適用しました。取り消すことができます。",
-  "ai.inline.invalidEdit": "有効な編集結果がないため原稿は変更していません。履歴を確認して再度指示してください。"
+  "ai.inline.invalidEdit": "有効な編集結果がないため原稿は変更していません。履歴を確認して再度指示してください。",
+  "revision.savedExplanation": "実行前と実行後に保存された原稿です。実行中の手動・外部変更も含まれる場合があります。",
+  "revision.noChanges": "原稿ファイルの変更はありません。",
+  "revision.file": "ファイル",
+  "revision.saved": "保存された編集結果",
+  "revision.fileAbsent": "ファイルなし"
 }

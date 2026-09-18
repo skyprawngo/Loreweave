@@ -121,7 +121,7 @@ enum ManuscriptRevisionBridge {
         return url
     }
 
-    private static func safeStorage(project: URL) throws -> URL {
+    static func safeStorage(project: URL) throws -> URL {
         let root = project.resolvingSymlinksInPath().standardizedFileURL
         var directory = root
         for component in [".\(project.deletingPathExtension().lastPathComponent).weavedata", "ai-revisions"] {
@@ -136,8 +136,10 @@ enum ManuscriptRevisionBridge {
         try JSONEncoder().encode(revision).write(to: directory.appendingPathComponent(revision.id.uuidString + ".json"), options: .atomic)
     }
     static func remove(id: UUID, project: URL) throws {
-        let file = try safeStorage(project: project).appendingPathComponent(id.uuidString + ".json")
-        if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        for suffix in [".json", "-workspace.json", "-baseline.json"] {
+            let file = try safeStorage(project: project).appendingPathComponent(id.uuidString + suffix)
+            if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        }
     }
     static func load(id: UUID, project: URL) -> ManuscriptRevision? {
         guard let directory = try? safeStorage(project: project) else { return nil }
@@ -174,5 +176,85 @@ struct InlineEditRequest: Encodable {
             throw ManuscriptRevision.Failure.invalidEdit
         }
         return text
+    }
+}
+
+
+/// Actual disk revisions, independent of the assistant's natural-language answer.
+struct AIWorkspaceChange: Codable, Identifiable {
+    var id: String { relativePath }
+    let relativePath: String
+    let before: String?
+    let after: String?
+
+    var revision: ManuscriptRevision {
+        ManuscriptRevision(id: UUID(), relativePath: relativePath, original: before ?? "",
+            selectionLocation: 0, selectionLength: ((before ?? "") as NSString).length)
+    }
+}
+
+struct AIWorkspaceRevision: Codable, Identifiable {
+    let id: UUID
+    let changes: [AIWorkspaceChange]
+}
+
+@MainActor
+enum AIWorkspaceEdits {
+    // Bound snapshot memory and fail before dispatch rather than silently omit a manuscript.
+    static func snapshot(project: URL) throws -> [String: String] {
+        let root = project.resolvingSymlinksInPath().standardizedFileURL
+        var enumerationError: Error?
+        guard let files = FileManager.default.enumerator(at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants], errorHandler: { _, error in
+                enumerationError = error; return false
+            }) else { throw ManuscriptRevision.Failure.unavailable }
+        var result: [String: String] = [:], bytes = 0
+        for case let url as URL in files {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard values.isSymbolicLink != true, values.isRegularFile == true,
+                  ["md", "txt", "markdown"].contains(url.pathExtension.lowercased()) else { continue }
+            let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard path.hasPrefix(root.path + "/") else { throw ManuscriptRevision.Failure.unavailable }
+            bytes += values.fileSize ?? 0
+            guard bytes <= 64 * 1024 * 1024 else { throw ManuscriptRevision.Failure.unavailable }
+            result[String(path.dropFirst(root.path.count + 1))] = try String(contentsOf: url, encoding: .utf8)
+        }
+        if let enumerationError { throw enumerationError }
+        return result
+    }
+
+    static func prepare(id: UUID, project: URL) throws -> [String: String] {
+        try EditorTabManager.shared.prepareForAIWorkspaceEdit(project: project)
+        let before = try snapshot(project: project)
+        // Durable even if the app quits or the agent stops halfway through a write.
+        let directory = try ManuscriptRevisionBridge.safeStorage(project: project)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONEncoder().encode(before).write(to: directory.appendingPathComponent(id.uuidString + "-baseline.json"), options: .atomic)
+        return before
+    }
+
+    static func finish(id: UUID, before: [String: String], project: URL) throws {
+        let after = try snapshot(project: project)
+        let changes = Set(before.keys).union(after.keys).sorted().compactMap { path -> AIWorkspaceChange? in
+            guard before[path] != after[path] else { return nil }
+            return AIWorkspaceChange(relativePath: path, before: before[path], after: after[path])
+        }
+        let record = AIWorkspaceRevision(id: id, changes: changes)
+        let file = try ManuscriptRevisionBridge.safeStorage(project: project).appendingPathComponent(id.uuidString + "-workspace.json")
+        try JSONEncoder().encode(record).write(to: file, options: .atomic)
+        NotificationCenter.default.post(name: Notification.Name("aiWorkspaceFilesDidChange"), object: project, userInfo: ["requestID": id])
+    }
+
+    static func exists(id: UUID, project: URL) -> Bool {
+        guard let file = try? ManuscriptRevisionBridge.safeStorage(project: project).appendingPathComponent(id.uuidString + "-workspace.json") else { return false }
+        return FileManager.default.fileExists(atPath: file.path)
+    }
+
+    static func load(id: UUID, project: URL) -> AIWorkspaceRevision? {
+        guard let file = try? ManuscriptRevisionBridge.safeStorage(project: project).appendingPathComponent(id.uuidString + "-workspace.json"),
+              (try? file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+              let data = try? Data(contentsOf: file), let record = try? JSONDecoder().decode(AIWorkspaceRevision.self, from: data), record.id == id else { return nil }
+        return record
     }
 }

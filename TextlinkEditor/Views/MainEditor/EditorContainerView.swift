@@ -25,6 +25,7 @@ struct EditorContainerView: View {
     @State private var wordCount = 0
     @State private var characterCount = 0
     @State private var lineCount = 1
+    @State private var presentedTool: String?
     @State private var fontSize: CGFloat = UserSettings.shared.editorFontSize
     @State private var fontName: String = UserSettings.shared.editorFontName
     @State private var lineSpacingOption: LineSpacingOption = .normal
@@ -35,6 +36,9 @@ struct EditorContainerView: View {
     @State private var currentDocumentID: UUID?
     @State private var contentRevision = UUID()
     @State private var loadError: String?
+    @State private var documentLoadTask: Task<Void, Never>?
+    @State private var documentLoadID = UUID()
+    @State private var preparedContent: PreparedManuscript?
     @State private var showingFind = false
     @State private var showingReplace = false
     @State private var findText = ""
@@ -52,16 +56,35 @@ struct EditorContainerView: View {
     @State private var autoSaveOption: AutoSaveOption = UserSettings.shared.autoSaveOption
 
     // 외부 파일 변경 감시
-    @State private var fileWatchTimer: Timer?
-    @State private var observedDiskURL: URL?
-    @State private var observedDiskDate: Date?
-    @State private var observedDiskSize: Int?
 
     private var currentFileExists: Bool {
         tabManager.selectedTab?.fileExists ?? true
     }
 
     var body: some View {
+        commandContent
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aiWorkspaceFilesDidChange"))) { notification in
+            guard let project = notification.object as? URL,
+                  project.standardizedFileURL == projectManager.currentProject?.path?.standardizedFileURL else { return }
+            tabManager.refreshExternalDocuments()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .editorDiskContentDidChange)) { notification in
+            guard let url = notification.object as? URL, url == currentFileURL,
+                  !isLoading, let state = tabManager.getEditState(for: url) else { return }
+            let previous = text
+            preparedContent = nil
+            loadError = nil
+            initialCursorPosition = state.cursorPosition
+            contentRevision = UUID()
+            text = state.content
+            externallyModifiedLines = DocumentFileStore.changedLines(from: previous, to: state.content)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .editorDiskStateDidChange)) { _ in
+            FileSystemManager.shared.refreshProject()
+        }
+    }
+
+    private var editorWithState: some View {
         VStack(spacing: 0) {
             if tabManager.isEmpty {
                 emptyStateView
@@ -73,9 +96,8 @@ struct EditorContainerView: View {
                     lineSpacingOption: $lineSpacingOption,
                     letterSpacing: $letterSpacing,
                     fontName: $fontName,
-                    onFormatAction: { formatType in
-                        editCommand = EditorCommand(.format(formatType))
-                    }
+                    onToolAction: { editCommand = EditorCommand(.tool($0)) },
+                    presentedTool: $presentedTool
                 )
 
                 }
@@ -122,12 +144,12 @@ struct EditorContainerView: View {
                     fontName: fontName,
                     lineHeightMultiple: lineSpacingOption.rawValue,
                     letterSpacing: letterSpacing,
-                    isEditable: loadError == nil,
+                    isEditable: loadError == nil && !isLoading,
                     initialCursorPosition: initialCursorPosition,
                     onContentWillChange: { ownerURL, finalText, cursorLine, cursorColumn in
                         // 탭 전환 직전: 이전 파일의 최종 텍스트(조합 확정 후)와 커서 위치를 캐시에 저장
                         if let prevURL = ownerURL, tabManager.findTab(with: prevURL) != nil,
-                           !(prevURL == currentFileURL && loadError != nil) {
+                           !(prevURL == currentFileURL && (loadError != nil || isLoading)) {
                             if tabManager.getCachedContent(for: prevURL) != finalText { clearModifiedLinesOnEdit() }
                             tabManager.setCachedContent(finalText, for: prevURL)
                             // 조합 확정 후의 커서 위치 저장 (이미 0-based)
@@ -141,10 +163,13 @@ struct EditorContainerView: View {
                     isDocumentActive: { id, url, revision in
                         tabManager.selectedTab?.id == id && tabManager.selectedTab?.url == url && contentRevision == revision
                     },
-                    openDocumentIDs: Set(tabManager.tabs.map(\.id))
+                    openDocumentIDs: Set(tabManager.tabs.map(\.id)),
+                    preparedContent: preparedContent,
+                    onToolPresentation: { control in focusMode = false; presentedTool = control }
                 )
                 .background(AppColors.textEditorBackground)
                 .clipped()
+                .overlay { if isLoading { ProgressView().controlSize(.regular).allowsHitTesting(false) } }
 
                 // 상태바
                 EditorStatusBarView(
@@ -179,6 +204,10 @@ struct EditorContainerView: View {
             guard let url = currentFileURL, !isLoading, loadError == nil, tabManager.findTab(with: url) != nil else { return }
             tabManager.setCachedCursorPosition(line: cursorLine - 1, column: cursorColumn, for: url)
         }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("executeEditorTool"))) { notification in
+            guard let id = notification.object as? String else { return }
+            editCommand = EditorCommand(.tool(id))
+        }
         .onChange(of: fontSize) { _, newValue in
             // 폰트 크기 변경 시 프로젝트 설정에 저장
             guard !isLoadingSettings else { return }
@@ -204,17 +233,23 @@ struct EditorContainerView: View {
             loadFileContent(from: tabManager.selectedTab?.url)
             loadEditorSettingsFromProject()
             setupAutoSaveTimer()
-            startFileWatchTimer()
+            tabManager.refreshExternalDocuments()
         }
         .onDisappear {
+            documentLoadTask?.cancel()
+            documentLoadTask = nil
+            documentLoadID = UUID()
             statisticsTask?.cancel()
             stopAutoSaveTimer()
-            stopFileWatchTimer()
         }
         .onChange(of: autoSaveOption) { _, newValue in
             UserSettings.shared.autoSaveOption = newValue
             setupAutoSaveTimer()
         }
+    }
+
+    private var commandContent: some View {
+        editorWithState
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             let updated = UserSettings.shared.autoSaveOption
             if autoSaveOption != updated { autoSaveOption = updated }
@@ -295,85 +330,72 @@ struct EditorContainerView: View {
     // MARK: - File Loading
 
     private func loadFileContent(from url: URL?) {
-        guard let url = url else {
-            currentDocumentID = nil
-            loadError = nil
-            text = ""
-            currentFileURL = nil
-            initialCursorPosition = nil
-            externallyModifiedLines = []
-            return
-        }
-
-        guard url != currentFileURL || currentDocumentID != tabManager.selectedTab?.id else { return }
-
+        guard url != currentFileURL || currentDocumentID != tabManager.selectedTab?.id || (isLoading && documentLoadTask == nil) else { return }
+        documentLoadTask?.cancel()
+        preparedContent = nil
+        let request = UUID()
+        documentLoadID = request
         currentFileURL = url
-        contentRevision = UUID()
         currentDocumentID = tabManager.selectedTab?.id
+        contentRevision = UUID()
+        initialCursorPosition = nil
+        externallyModifiedLines = []
         loadError = nil
-        isLoading = true
-        defer { isLoading = false }
-        if let state = tabManager.getEditState(for: url), state.isModified {
+        guard let url else { text = ""; isLoading = false; return }
+        if let state = tabManager.getEditState(for: url), tabManager.hasLoadedContent(for: url) {
             text = state.content
             initialCursorPosition = state.cursorPosition
-            externallyModifiedLines = []
+            isLoading = false
+            tabManager.refreshExternalDocuments()
             return
         }
-
-        // 디스크에서 파일 읽기
-        let fileContent: String
-        do {
-            fileContent = try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            loadError = L10n.get("storage.readFailed") + " " + error.localizedDescription
-            text = ""
-            return
+        isLoading = true
+        text = tabManager.getCachedContent(for: url) ?? ""
+        let documentID = currentDocumentID
+        documentLoadTask = Task { @MainActor in
+            do {
+                let content = try await DocumentFileStore.readInChunks(at: url)
+                let prepared = content.utf8.count > 250_000
+                    ? try await PreparedManuscript.prepare(text: content, fontName: fontName, fontSize: fontSize,
+                        lineHeightMultiple: lineSpacingOption.rawValue, letterSpacing: letterSpacing, color: AppColors.nsEditorText)
+                    : nil
+                guard !Task.isCancelled, documentLoadID == request,
+                      currentDocumentID == documentID, tabManager.selectedTab?.id == documentID,
+                      currentFileURL == url else { return }
+                let cursor = tabManager.getCachedCursorPosition(for: url) ?? (0, 0)
+                // A late flush/recovery may have created a draft while the read was pending.
+                if let draft = tabManager.getEditState(for: url), draft.isModified {
+                    text = draft.content
+                } else {
+                    tabManager.setEditState(TabEditState(content: content, originalContent: content, cursorPosition: cursor), for: url)
+                    preparedContent = prepared
+                    text = content
+                }
+                if UserSettings.shared.rememberCursorPosition { initialCursorPosition = cursor }
+                contentRevision = UUID()
+                isLoading = false
+                documentLoadTask = nil
+            } catch {
+                guard !Task.isCancelled, documentLoadID == request else { return }
+                loadError = L10n.get("storage.readFailed") + " " + error.localizedDescription
+                isLoading = false
+                documentLoadTask = nil
+            }
         }
-
-        // 기존 캐시된 커서 위치 먼저 가져오기 (덮어쓰기 전에)
-        let cachedCursor = tabManager.getCachedCursorPosition(for: url)
-
-        // 탭이 수정된 상태인 경우에만 캐시 사용
-        // 수정되지 않은 탭은 항상 디스크에서 읽음 (외부 변경 반영)
-        if let editState = tabManager.getEditState(for: url), editState.isModified {
-            // 수정된 탭: 캐시된 내용 사용
-            text = editState.content
-            externallyModifiedLines = []
-        } else {
-            // 수정되지 않은 탭: 디스크에서 읽은 내용 사용
-            text = fileContent
-            // 편집 상태 초기화 (커서 위치는 유지)
-            tabManager.setEditState(
-                TabEditState(
-                    content: fileContent,
-                    originalContent: fileContent,
-                    cursorPosition: cachedCursor ?? (0, 0)
-                ),
-                for: url
-            )
-            externallyModifiedLines = []
-        }
-
-        // 커서 위치 복원 (설정이 활성화된 경우에만)
-        // 탭 전환 시 커서 위치로 스크롤됨 (TextlinkEditorRepresentable에서 처리)
-        if UserSettings.shared.rememberCursorPosition, let cursor = cachedCursor {
-            initialCursorPosition = cursor
-        } else {
-            initialCursorPosition = nil
-        }
-
-        isLoading = false
     }
 
     // MARK: - Save
 
     private func handleSave() {
-        guard loadError == nil else { return }
+        guard loadError == nil, !isLoading else { return }
         tabManager.saveCurrentTab()
     }
 
     private var saveStatus: String {
         guard let url = currentFileURL else { return "" }
+        if tabManager.diskState(for: url) == .missing { return L10n.get("storage.externalDeleted") }
+        if tabManager.diskState(for: url) == .conflict { return L10n.get("storage.externalConflict") }
+        if tabManager.diskState(for: url) == .unreadable { return L10n.get("storage.readFailed") }
         if loadError != nil || tabManager.saveErrors[url] != nil { return L10n.get("storage.saveFailed") }
         if tabManager.isModified(url: url) { return L10n.get("storage.unsaved") }
         if let time = tabManager.lastSavedAt[url] {
@@ -489,52 +511,6 @@ struct EditorContainerView: View {
         if let cachedContent = tabManager.getCachedContent(for: url) {
             _ = tabManager.saveTab(at: index, content: cachedContent)
         }
-    }
-
-    // MARK: - External File Change Detection
-
-    /// 외부 파일 변경 감시 타이머 시작
-    private func startFileWatchTimer() {
-        stopFileWatchTimer()
-
-        // 1초마다 파일 변경 확인
-        fileWatchTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            checkForExternalFileChanges()
-        }
-    }
-
-    /// 외부 파일 변경 감시 타이머 정지
-    private func stopFileWatchTimer() {
-        fileWatchTimer?.invalidate()
-        fileWatchTimer = nil
-    }
-
-    /// 현재 열린 파일의 외부 변경 확인
-    private func checkForExternalFileChanges() {
-        guard let url = currentFileURL, loadError == nil,
-              let attributes = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return }
-        // Poll metadata, not megabytes of unchanged manuscript on the main thread.
-        // Saving still compares the complete disk revision under file coordination.
-        if observedDiskURL == url, let date = attributes.contentModificationDate,
-           date == observedDiskDate, let size = attributes.fileSize, size == observedDiskSize { return }
-        guard let base = tabManager.getEditState(for: url)?.originalContent,
-              let newContent = try? String(contentsOf: url, encoding: .utf8) else { return }
-        observedDiskURL = url
-        observedDiskDate = attributes.contentModificationDate
-        observedDiskSize = attributes.fileSize
-        guard newContent != base else { return }
-        // Commit IME only when there is a competing disk revision, not on every timer tick.
-        tabManager.flushEditor()
-        guard currentFileURL == url else { return }
-        if tabManager.isModified(url: url) {
-            tabManager.saveErrors[url] = L10n.get("storage.conflict")
-            return
-        }
-        let cursor = tabManager.getCachedCursorPosition(for: url) ?? (0, 0)
-        tabManager.setEditState(TabEditState(content: newContent, originalContent: newContent, cursorPosition: cursor), for: url)
-        contentRevision = UUID()
-        text = newContent
-        externallyModifiedLines = DocumentFileStore.changedLines(from: base, to: newContent)
     }
 
     /// 사용자 편집 시 수정된 줄 표시 초기화

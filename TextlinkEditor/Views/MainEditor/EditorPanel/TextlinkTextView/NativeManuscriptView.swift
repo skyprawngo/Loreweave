@@ -1,8 +1,10 @@
 import AppKit
 
 /// NSTextView owns input, selection, key bindings and undo. Only manuscript commands
-/// and the line-number accessory are app-specific. Layout remains viewport-driven.
-final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
+/// and the line-number accessory are app-specific. TextKit 2 owns viewport layout.
+final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, EditorToolTarget {
+    lazy var toolBridge = EditorToolBridge(editor: self)
+    private var displayStyle: EditorDisplayStyle?
     private(set) var inlinePanel: NSView?
     private var inlineAnchor = 0
     private let inlineHeight: CGFloat = 100
@@ -12,17 +14,20 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
     @objc func undo(_ sender: Any?) { commitComposition(); undoManager?.undo() }
     @objc func redo(_ sender: Any?) { commitComposition(); undoManager?.redo() }
     var lineStarts = [0]
+    private var lineIndexNeedsUpdate = true
+    private var storageEditObserver: NSObjectProtocol?
+    private(set) var lastIndexedUTF16Count = 0
+    private var textEditGeneration = 0
     var styleKey = ""
     var modifiedLines: Set<Int> = []
 
     init() {
-        let storage = NSTextStorage()
-        let layout = NSLayoutManager()
-        layout.allowsNonContiguousLayout = true
-        storage.addLayoutManager(layout)
+        let content = NSTextContentStorage()
+        let layout = NSTextLayoutManager()
+        content.addTextLayoutManager(layout)
         let container = NSTextContainer(size: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
-        layout.addTextContainer(container)
+        layout.textContainer = container
         super.init(frame: NSRect(x: 0, y: 0, width: 600, height: 400), textContainer: container)
         layout.delegate = self
         isRichText = false
@@ -42,11 +47,57 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
         backgroundColor = AppColors.nsTextEditorBackground
         insertionPointColor = AppColors.nsEditorCursor
         textColor = AppColors.nsEditorText
+        storageEditObserver = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification, object: nil, queue: nil
+        ) { [weak self] notification in
+            guard let self, let storage = notification.object as? NSTextStorage,
+                  storage === self.textStorage, storage.editedMask.contains(.editedCharacters) else { return }
+            self.updateLineIndex(storage)
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    deinit {
+        if let storageEditObserver { NotificationCenter.default.removeObserver(storageEditObserver) }
+    }
+
+    /// Rescan only the edited paragraphs, including neighbors for CRLF joins/splits.
+    /// Storage notifications include Undo and IME edits as well as toolbar commands.
+    private func updateLineIndex(_ storage: NSTextStorage) {
+        guard !lineIndexNeedsUpdate else { return }
+        let range = storage.editedRange
+        let delta = storage.changeInLength
+        let oldEnd = NSMaxRange(range) - delta
+        let first = line(at: max(0, range.location - 1))
+        let suffix = min(lineStarts.count, line(at: oldEnd) + 2)
+        let start = lineStarts[first]
+        let end = suffix < lineStarts.count ? lineStarts[suffix] + delta : storage.length
+        guard start <= end, end <= storage.length else { lineIndexNeedsUpdate = true; return }
+        let value = storage.attributedSubstring(from: NSRange(location: start, length: end - start)).string as NSString
+        lastIndexedUTF16Count = value.length
+        var replacement = [start]
+        var offset = 0
+        while offset < value.length {
+            let next = NSMaxRange(value.lineRange(for: NSRange(location: offset, length: 0)))
+            guard next > offset else { break }
+            if next < value.length { replacement.append(start + next) }
+            else if suffix == lineStarts.count, let scalar = UnicodeScalar(value.character(at: value.length - 1)),
+                    CharacterSet.newlines.contains(scalar) { replacement.append(start + next) }
+            offset = next
+        }
+        // No text scan or allocation of the untouched manuscript suffix.
+        if delta != 0 {
+            for index in suffix..<lineStarts.count { lineStarts[index] += delta }
+        }
+        lineStarts.replaceSubrange(first..<suffix, with: replacement)
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+    }
+
     func rebuildLineIndex() {
+        guard lineIndexNeedsUpdate else { return }
+        lineIndexNeedsUpdate = false
         let value = string as NSString
+        lastIndexedUTF16Count = value.length
         var starts = [0]
         var offset = 0
         while offset < value.length {
@@ -70,10 +121,10 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
         return max(0, low - 1)
     }
     func position(at offset: Int) -> (line: Int, column: Int) {
-        let value = string as NSString
-        let offset = min(max(0, offset), value.length)
+        let offset = min(max(0, offset), textStorage?.length ?? 0)
         let row = line(at: offset)
-        return (row, value.substring(with: NSRange(location: lineStarts[row], length: offset - lineStarts[row])).count)
+        let prefix = textStorage?.attributedSubstring(from: NSRange(location: lineStarts[row], length: offset - lineStarts[row])).string ?? ""
+        return (row, prefix.count)
     }
     func offset(line: Int, column: Int) -> Int {
         let row = min(max(0, line), lineStarts.count - 1)
@@ -88,25 +139,137 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
         if hasMarkedText() { unmarkText(); inputContext?.discardMarkedText() }
         breakUndoCoalescing()
     }
-    func load(_ value: String) {
+    func load(_ value: String, prepared: PreparedManuscript? = nil) {
+        toolBridge.cancelPending()
+        pendingCursorAnchor = nil
+        displayStyle = nil
         closeInlinePanel()
         commitComposition()
-        string = value
-        styleKey = ""
+        lineIndexNeedsUpdate = true
+        if let prepared, prepared.text == value, let content = textContentStorage,
+           let storage = prepared.takeStorage() {
+            content.textStorage = storage
+            typingAttributes = prepared.typingAttributes
+            defaultParagraphStyle = prepared.typingAttributes[.paragraphStyle] as? NSParagraphStyle
+            styleKey = prepared.styleKey
+            lineStarts = prepared.lineStarts
+            lineIndexNeedsUpdate = false
+            lastIndexedUTF16Count = 0
+        } else {
+            string = value
+            styleKey = ""
+        }
         undoManager?.removeAllActions()
         rebuildLineIndex()
     }
+    /// Disk reloads and AI edits preserve the first visible text line, independent of the caret.
+    func applyExternalText(_ value: String, prepared: PreparedManuscript? = nil, undoable: Bool = false) {
+        let original = string
+        guard original != value else { return }
+        let oldLength = original.utf16.count
+        let newLength = value.utf16.count
+        var prefix = 0
+        for (old, new) in zip(original, value) {
+            guard old == new else { break }
+            prefix += String(old).utf16.count
+        }
+        var suffix = 0
+        for (old, new) in zip(original.reversed(), value.reversed()) {
+            let count = String(old).utf16.count
+            guard old == new, suffix + count <= min(oldLength, newLength) - prefix else { break }
+            suffix += count
+        }
+        func mapped(_ offset: Int) -> Int {
+            if offset <= prefix { return offset }
+            if offset >= oldLength - suffix { return max(0, offset + newLength - oldLength) }
+            return prefix + min(offset - prefix, newLength - prefix - suffix)
+        }
+        let selection = selectedRange()
+        let style = displayStyle
+        var anchor: CursorViewportAnchor?
+        if let scroll = enclosingScrollView {
+            let point = NSPoint(x: textContainerOrigin.x + (textContainer?.lineFragmentPadding ?? 0),
+                                y: scroll.contentView.bounds.minY + 1)
+            let offset = min(characterIndexForInsertion(at: point), oldLength)
+            if let rect = lineRect(at: offset) {
+                anchor = CursorViewportAnchor(offset: mapped(offset),
+                    screenY: rect.minY + textContainerOrigin.y - scroll.contentView.bounds.minY)
+            }
+        }
+        if undoable {
+            let replacement = (value as NSString).substring(with: NSRange(location: prefix, length: newLength - prefix - suffix))
+            replace(NSRange(location: prefix, length: oldLength - prefix - suffix), with: replacement)
+        } else {
+            load(value, prepared: prepared)
+            if let style { applyDisplayStyle(style) }
+        }
+        let start = mapped(min(selection.location, oldLength))
+        let end = mapped(min(NSMaxRange(selection), oldLength))
+        setSelectedRange(NSRange(location: start, length: max(0, end - start)))
+        if let anchor { restoreCursorViewportAnchor(anchor) }
+        needsLayout = true
+        needsDisplay = true
+    }
+
     func replace(_ range: NSRange, with replacement: String, selectReplacement: Bool = false) {
         guard isEditable, shouldChangeText(in: range, replacementString: replacement) else { return }
         breakUndoCoalescing()
-        textStorage?.replaceCharacters(in: range, with: replacement)
+        textContentStorage?.performEditingTransaction {
+            textStorage?.replaceCharacters(in: range, with: replacement)
+        }
         didChangeText()
         setSelectedRange(NSRange(location: selectReplacement ? range.location : range.location + replacement.utf16.count,
                                  length: selectReplacement ? replacement.utf16.count : 0))
     }
+    var onToolPresentation: ((String) -> Void)?
+
+    func runTool(_ definition: EditorToolDefinition) {
+        let effects: EditorToolDescriptor.Effects
+        let category: EditorToolDescriptor.Category
+        switch definition.impact {
+        case .text: effects = [.text, .selection, .layout]; category = .documentEdit
+        case .selection: effects = [.selection, .layout]; category = .navigation
+        case .presentation: effects = []; category = .presentation
+        case .request: effects = []; category = .assistant
+        }
+        toolBridge.perform(.init(name: definition.id, category: category, effects: effects)) {
+            let generation = self.textEditGeneration
+            let selection = self.selectedRange()
+            let panel = self.inlinePanel
+            definition.operation(self)
+            return generation != self.textEditGeneration || selection != self.selectedRange() || panel !== self.inlinePanel
+                || definition.impact == .request || definition.impact == .presentation
+        }
+    }
+    func toolFormat(_ kind: String) {
+        let formats: [String: MarkdownFormatType] = ["bold": .bold, "italic": .italic, "boldItalic": .boldItalic,
+                                                    "underline": .underline, "strikethrough": .strikethrough]
+        if let format = formats[kind] { applyCommand(EditorCommand(.format(format))) }
+    }
+    func toolAssistant(_ titleKey: String) { applyCommand(EditorCommand(.assistantDraft(L10n.get(titleKey)))) }
+    func toolPresent(_ control: String) { onToolPresentation?(control) }
+    func toolAttachSelection() {
+        guard selectedRange().length > 0 else { return }
+        let text = textStorage?.attributedSubstring(from: selectedRange()).string ?? ""
+        NotificationCenter.default.post(name: Notification.Name("aiAttachSelection"), object: text)
+    }
+
     func execute(_ command: EditorCommand) {
-        commitComposition()
+        if case .tool(let id) = command.action { EditorToolRegistry.perform(id, on: self); return }
+        toolBridge.perform(command.tool) {
+            let generation = self.textEditGeneration
+            let selection = self.selectedRange()
+            self.applyCommand(command)
+            return generation != self.textEditGeneration || selection != self.selectedRange() || command.tool.category == .assistant
+        }
+    }
+
+    private func applyCommand(_ command: EditorCommand) {
         switch command.action {
+        case .tool: return
+        case .assistantDraft(let action):
+            NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: action)
+            return
         case .locate(let line, let query):
             let start = offset(line: line, column: 0)
             let source = string as NSString
@@ -118,7 +281,7 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
             guard !query.isEmpty, isEditable else { return }
             if all {
                 let result = string.replacingOccurrences(of: query, with: replacement)
-                if result != string { replace(NSRange(location: 0, length: (string as NSString).length), with: result) }
+                if result != string { replace(NSRange(location: 0, length: (textStorage?.length ?? 0)), with: result) }
             } else {
                 if (string as NSString).substring(with: selectedRange()) != query { find(query, forward: true) }
                 if (string as NSString).substring(with: selectedRange()) == query { replace(selectedRange(), with: replacement) }
@@ -133,7 +296,7 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
             case .underline: markers = ("<u>", "</u>")
             case .strikethrough: markers = ("~~", "~~")
             }
-            let selected = (string as NSString).substring(with: selectedRange())
+            let selected = textStorage?.attributedSubstring(from: selectedRange()).string ?? ""
             let result = selected.hasPrefix(markers.0) && selected.hasSuffix(markers.1) && selected.count >= markers.0.count + markers.1.count
                 ? String(selected.dropFirst(markers.0.count).dropLast(markers.1.count)) : markers.0 + selected + markers.1
             replace(selectedRange(), with: result, selectReplacement: true)
@@ -151,33 +314,95 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
         if match.location == NSNotFound { match = value.range(of: query, options: options) }
         if match.location != NSNotFound { setSelectedRange(match) }
     }
+    /// All geometry is in the TextKit 2 container coordinate system. Never access
+    /// NSTextView.layoutManager: that would silently enable TextKit 1 compatibility.
+    func textLocation(at offset: Int) -> (any NSTextLocation)? {
+        guard let content = textLayoutManager?.textContentManager else { return nil }
+        return content.location(content.documentRange.location, offsetBy: min(max(0, offset), textStorage?.length ?? 0))
+    }
+
+    private func layoutFragment(at location: any NSTextLocation) -> NSTextLayoutFragment? {
+        guard let manager = textLayoutManager else { return nil }
+        if let fragment = manager.textLayoutFragment(for: location) { return fragment }
+        // Empty documents / trailing empty paragraphs have a zero-length fragment.
+        // A location lookup can miss it; enumeration includes that cached fragment.
+        var result: NSTextLayoutFragment?
+        manager.enumerateTextLayoutFragments(from: location, options: [.ensuresExtraLineFragment]) { fragment in
+            result = fragment
+            return false
+        }
+        if result == nil, let content = manager.textContentManager,
+           location.compare(content.documentRange.endLocation) == .orderedSame,
+           let previous = content.location(location, offsetBy: -1) {
+            result = manager.textLayoutFragment(for: previous)
+        }
+        return result
+    }
+
+    func lineRect(at offset: Int) -> NSRect? {
+        guard let location = textLocation(at: offset),
+              let fragment = layoutFragment(at: location),
+              fragment.state == .layoutAvailable,
+              let line = fragment.textLineFragment(for: location, isUpstreamAffinity: false)
+                ?? (offset == textStorage?.length ? fragment.textLineFragments.last : nil) else { return nil }
+        return line.typographicBounds.offsetBy(dx: fragment.layoutFragmentFrame.minX,
+                                               dy: fragment.layoutFragmentFrame.minY)
+    }
+
+    /// Enumerate only already-laid-out viewport fragments; accessories never lay out
+    /// the entire document just to obtain line numbers or selection backgrounds.
+    func visibleManuscriptLines() -> [(row: Int, rect: NSRect)] {
+        guard let manager = textLayoutManager, let content = manager.textContentManager,
+              let viewport = manager.textViewportLayoutController.viewportRange else { return [] }
+        let visible = visibleRect.offsetBy(dx: -textContainerOrigin.x, dy: -textContainerOrigin.y)
+        var lines: [(row: Int, rect: NSRect)] = []
+        manager.enumerateTextLayoutFragments(from: viewport.location, options: [.ensuresExtraLineFragment]) { fragment in
+            // Unlaid-out fragments have zero geometry. Testing their Y coordinate
+            // alone walks to EOF and materializes the rest of a large document.
+            // Bound traversal by text locations before reading any geometry.
+            guard fragment.rangeInElement.location.compare(viewport.endLocation) != .orderedDescending,
+                  fragment.state == .layoutAvailable else { return false }
+            guard fragment.layoutFragmentFrame.minY <= visible.maxY else { return false }
+            let start = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+            for lineFragment in fragment.textLineFragments {
+                let offset = start + lineFragment.characterRange.location
+                let row = self.line(at: offset)
+                // Soft-wrapped continuation lines have no separate manuscript number.
+                guard self.lineStarts[row] == offset else { continue }
+                let frame = lineFragment.typographicBounds.offsetBy(dx: fragment.layoutFragmentFrame.minX,
+                                                                    dy: fragment.layoutFragmentFrame.minY)
+                if frame.maxY >= visible.minY && frame.minY <= visible.maxY { lines.append((row, frame)) }
+            }
+            return true
+        }
+        return lines
+    }
+
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard selectedRange().length == 0, let layout = layoutManager else { return }
-        let offset = selectedRange().location
-        var lineRect: NSRect
-        if offset == (string as NSString).length { lineRect = layout.extraLineFragmentRect }
-        else {
-            let glyph = layout.glyphIndexForCharacter(at: offset)
-            lineRect = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
-        }
-        lineRect = manuscriptRect(lineRect)
+        guard selectedRange().length == 0,
+              let viewport = textLayoutManager?.textViewportLayoutController.viewportRange,
+              let location = textLocation(at: selectedRange().location),
+              location.compare(viewport.location) != .orderedAscending,
+              location.compare(viewport.endLocation) != .orderedDescending,
+              var lineRect = lineRect(at: selectedRange().location) else { return }
         lineRect.origin.y += textContainerOrigin.y
         lineRect.origin.x = 0
         lineRect.size.width = bounds.width
         if lineRect.intersects(rect) { AppColors.nsCurrentLineHighlight.setFill(); lineRect.intersection(rect).fill() }
     }
 
-    private func isInlineShortcut(_ event: NSEvent) -> Bool {
-        event.keyCode == 34 && event.modifierFlags.intersection([.command, .option, .shift, .control]) == [.command, .option]
-    }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if window?.firstResponder === self, isInlineShortcut(event) { openInlineAI(nil); return true }
+        let responder = window?.firstResponder as? NSView
+        let inlineFocused = inlinePanel.map { responder?.isDescendant(of: $0) == true } ?? false
+        if let action = KeyboardShortcutManager.shared.action(matching: event),
+           window?.firstResponder === self || (inlineFocused && action.rawValue == "ai.inline"),
+           EditorToolRegistry.perform(action.rawValue, on: self) { return true }
         return super.performKeyEquivalent(with: event)
     }
     override func keyDown(with event: NSEvent) {
-        if isInlineShortcut(event) { openInlineAI(nil); return }
         if let action = KeyboardShortcutManager.shared.action(matching: event) {
+            if EditorToolRegistry.perform(action.rawValue, on: self) { return }
             switch action {
             case .deleteWordBackward: deleteWordBackward(nil); return
             case .deleteToLineStart: deleteToBeginningOfLine(nil); return
@@ -196,7 +421,7 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
                 default: changed = state.duplicateLineDown()
                 }
                 if changed {
-                    replace(NSRange(location: 0, length: (string as NSString).length), with: state.getText())
+                    replace(NSRange(location: 0, length: (textStorage?.length ?? 0)), with: state.getText())
                     let selection = state.selection.range.normalized
                     let start = state.document.utf16Offset(from: selection.start)
                     setSelectedRange(NSRange(location: start, length: state.document.utf16Offset(from: selection.end) - start))
@@ -220,13 +445,18 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
         let attach = NSMenuItem(title: L10n.get("ai.context.attachSelection"), action: #selector(attachSelectionToAI(_:)), keyEquivalent: "")
         attach.target = self
         menu.addItem(attach)
-        let inline = NSMenuItem(title: L10n.get("ai.inline.open"), action: #selector(openInlineAI(_:)), keyEquivalent: "i")
-        inline.keyEquivalentModifierMask = [.command, .option]
+        let inline = NSMenuItem(title: L10n.get("ai.inline.open"), action: #selector(openInlineAI(_:)), keyEquivalent: "")
         inline.target = self
         menu.addItem(inline)
         return menu
     }
-    @objc private func openInlineAI(_ sender: Any?) {
+    @objc private func openInlineAI(_ sender: Any?) { EditorToolRegistry.perform("ai.inline", on: self) }
+    func toolToggleInline() {
+        if inlinePanel != nil {
+            closeInlinePanel()
+            window?.makeFirstResponder(self)
+            return
+        }
         guard isEditable else { return }
         commitComposition()
         NotificationCenter.default.post(name: Notification.Name("editorInlineAI"), object: self)
@@ -238,7 +468,7 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
         let selection = selectedRange()
         let end = min(source.length, selection.length > 0 ? NSMaxRange(selection) - 1 : selection.location)
         let lineRange = source.lineRange(for: NSRange(location: end, length: 0))
-        inlineAnchor = max(0, min(source.length - 1, NSMaxRange(lineRange) - 1))
+        inlineAnchor = lineRange.length == 0 ? source.length : NSMaxRange(lineRange) - 1
         inlinePanel = panel
         addSubview(panel)
         invalidateInlineLayout()
@@ -253,46 +483,170 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     private func invalidateInlineLayout() {
-        guard let manager = layoutManager, let container = textContainer else { return }
-        manager.invalidateLayout(forCharacterRange: NSRange(location: 0, length: (string as NSString).length), actualCharacterRange: nil)
-        // Only the anchor's layout is required; the rest remains noncontiguous.
-        if inlinePanel != nil, !string.isEmpty {
-            manager.ensureLayout(forCharacterRange: NSRange(location: inlineAnchor, length: 1))
+        guard let manager = textLayoutManager,
+              let location = textLocation(at: inlineAnchor) else { return }
+        // Invalidating the anchor paragraph refreshes its custom fragment and reflows
+        // following viewport fragments without changing the manuscript or undo stack.
+        let fragment = layoutFragment(at: location)
+        if let custom = fragment as? ManuscriptLayoutFragment {
+            custom.panelHeight = inlinePanel == nil ? 0 : inlineHeight
+            custom.invalidateLayout()
         }
-        manager.ensureLayout(forBoundingRect: visibleRect, in: container)
+        let range = fragment?.rangeInElement ?? NSTextRange(location: location)
+        manager.invalidateLayout(for: range)
+        manager.ensureLayout(for: range)
+        manager.textViewportLayoutController.layoutViewport()
         needsLayout = true
         layoutSubtreeIfNeeded()
         enclosingScrollView?.verticalRulerView?.needsDisplay = true
         needsDisplay = true
     }
 
-    func manuscriptRect(_ rect: NSRect) -> NSRect {
-        guard inlinePanel != nil, rect.height >= inlineHeight else { return rect }
-        var result = rect
-        result.size.height -= inlineHeight
-        return result
+    struct ViewportAnchor {
+        let location: any NSTextLocation
+        let offset: CGFloat
+    }
+    func captureViewportAnchor() -> ViewportAnchor? {
+        guard let manager = textLayoutManager,
+              let viewport = manager.textViewportLayoutController.viewportRange,
+              let fragment = manager.textLayoutFragment(for: viewport.location),
+              fragment.state == .layoutAvailable,
+              let scroll = enclosingScrollView else { return nil }
+        return ViewportAnchor(location: viewport.location,
+                              offset: scroll.contentView.bounds.minY - fragment.layoutFragmentFrame.minY - textContainerOrigin.y)
+    }
+    func restoreViewportAnchor(_ anchor: ViewportAnchor) {
+        guard let manager = textLayoutManager, let scroll = enclosingScrollView else { return }
+        let y = manager.textViewportLayoutController.relocateViewport(to: anchor.location)
+        scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: max(0, y + textContainerOrigin.y + anchor.offset)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+
+    struct CursorViewportAnchor {
+        let offset: Int
+        let screenY: CGFloat
+    }
+
+    /// Presentation changes follow the insertion line, not the manually scrolled viewport.
+    /// Inspect only existing visible layout before deciding whether to relocate offscreen text.
+    func captureCursorViewportAnchor() -> CursorViewportAnchor? {
+        if let pendingCursorAnchor, pendingCursorAnchor.offset == selectedRange().location {
+            return pendingCursorAnchor
+        }
+        guard let scroll = enclosingScrollView, let manager = textLayoutManager,
+              let location = textLocation(at: selectedRange().location) else { return nil }
+        let offset = selectedRange().location
+        if let viewport = manager.textViewportLayoutController.viewportRange,
+           location.compare(viewport.location) != .orderedAscending,
+           location.compare(viewport.endLocation) != .orderedDescending,
+           let rect = lineRect(at: offset) {
+            let y = rect.minY + textContainerOrigin.y - scroll.contentView.bounds.minY
+            if y >= 0, y + rect.height <= scroll.contentSize.height {
+                return CursorViewportAnchor(offset: offset, screenY: y)
+            }
+        }
+        let anchor = CursorViewportAnchor(offset: offset, screenY: 0)
+        // Move before changing attributes, in the same synchronous presentation transaction.
+        restoreCursorViewportAnchor(anchor)
+        return anchor
+    }
+
+    private var pendingCursorAnchor: CursorViewportAnchor?
+
+    func restoreCursorViewportAnchor(_ anchor: CursorViewportAnchor, afterLayout: Bool = false) {
+        if !afterLayout { pendingCursorAnchor = anchor }
+        guard let manager = textLayoutManager, let scroll = enclosingScrollView,
+              let location = textLocation(at: anchor.offset) else { return }
+        let controller = manager.textViewportLayoutController
+        let y = controller.relocateViewport(to: location)
+        scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX,
+            y: max(0, y + textContainerOrigin.y - anchor.screenY)))
+        controller.layoutViewport()
+        if let rect = lineRect(at: anchor.offset) {
+            scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX,
+                y: max(0, rect.minY + textContainerOrigin.y - anchor.screenY)))
+        }
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+
+    func applyDisplayStyle(_ style: EditorDisplayStyle) {
+        guard style.key != styleKey else { displayStyle = style; return }
+        toolBridge.perform(.init(name: "displayStyle", category: .presentation, effects: [.layout])) {
+            let delta = style.changedAttributes(from: self.displayStyle)
+            self.textContentStorage?.performEditingTransaction {
+                self.textStorage?.beginEditing()
+                self.textStorage?.addAttributes(delta, range: NSRange(location: 0, length: self.textStorage?.length ?? 0))
+                self.textStorage?.endEditing()
+            }
+            self.typingAttributes.merge(delta) { _, new in new }
+            if let paragraph = delta[.paragraphStyle] as? NSParagraphStyle { self.defaultParagraphStyle = paragraph }
+            self.displayStyle = style
+            self.styleKey = style.key
+            return true
+        }
+    }
+
+    // Window resizing preserves the viewport; presentation tools preserve the cursor line.
+    private var restoringResizeAnchor = false
+    override func setFrameSize(_ newSize: NSSize) {
+        let anchor = !restoringResizeAnchor && newSize.width != frame.width ? captureViewportAnchor() : nil
+        guard let anchor else { super.setFrameSize(newSize); return }
+        restoringResizeAnchor = true
+        defer { restoringResizeAnchor = false }
+        super.setFrameSize(newSize)
+        restoreViewportAnchor(anchor)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            toolBridge.cancelPending()
+            pendingCursorAnchor = nil
+        }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     override func layout() {
+        defer { toolBridge.viewportDidLayout() }
         super.layout()
-        guard let panel = inlinePanel, let manager = layoutManager else { return }
-        var y = textContainerOrigin.y
-        if !string.isEmpty {
-            let glyph = manager.glyphIndexForCharacter(at: min(inlineAnchor, (string as NSString).length - 1))
-            let rect = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-            y += rect.maxY - inlineHeight
+        if let anchor = pendingCursorAnchor {
+            pendingCursorAnchor = nil
+            restoreCursorViewportAnchor(anchor, afterLayout: true)
         }
-        panel.frame = NSRect(x: textContainerOrigin.x, y: y, width: max(100, bounds.width - 2 * textContainerOrigin.x), height: inlineHeight - 8)
-        if string.isEmpty { setFrameSize(NSSize(width: frame.width, height: max(enclosingScrollView?.contentSize.height ?? 0, inlineHeight + 24))) }
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+        guard let panel = inlinePanel,
+              let location = textLocation(at: inlineAnchor),
+              let fragment = layoutFragment(at: location),
+              fragment.state == .layoutAvailable else { return }
+        let y = fragment.layoutFragmentFrame.maxY - inlineHeight + textContainerOrigin.y
+        // The document view may temporarily retain a wider frame during split-view
+        // animation. Size against the clip view, not the manuscript's content width.
+        let viewport = enclosingScrollView.map { convert($0.contentView.bounds, from: $0.contentView) } ?? bounds
+        let inset = textContainerOrigin.x
+        var left = viewport.minX
+        if let scroll = enclosingScrollView, scroll.rulersVisible,
+           let ruler = scroll.verticalRulerView, !ruler.isHidden {
+            // Rulers may overlap the clip view. Convert their actual boundary into
+            // manuscript coordinates rather than assuming the clip width excludes it.
+            let rulerFrame = convert(ruler.bounds, from: ruler)
+            left = max(left, min(viewport.maxX, rulerFrame.maxX))
+        }
+        panel.frame = NSRect(x: left + inset, y: y,
+                             width: max(0, viewport.maxX - left - 2 * inset), height: inlineHeight - 8)
     }
 
-    func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>, lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>, in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
-        guard inlinePanel != nil, !string.isEmpty else { return false }
-        let characters = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
-        guard NSLocationInRange(min(inlineAnchor, (string as NSString).length - 1), characters) else { return false }
-        lineFragmentRect.pointee.size.height += inlineHeight
-        lineFragmentUsedRect.pointee.size.height += inlineHeight
-        return true
+    func textLayoutManager(_ textLayoutManager: NSTextLayoutManager,
+                           textLayoutFragmentFor location: any NSTextLocation,
+                           in textElement: NSTextElement) -> NSTextLayoutFragment {
+        let fragment = ManuscriptLayoutFragment(textElement: textElement, range: textElement.elementRange)
+        if inlinePanel != nil, let content = textLayoutManager.textContentManager,
+           let range = textElement.elementRange {
+            let start = content.offset(from: content.documentRange.location, to: range.location)
+            let end = content.offset(from: content.documentRange.location, to: range.endLocation)
+            if inlineAnchor >= start && (inlineAnchor < end || (inlineAnchor == end && end == (textStorage?.length ?? 0))) {
+                fragment.panelHeight = inlineHeight
+            }
+        }
+        return fragment
     }
 
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
@@ -308,18 +662,15 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     override func didChangeText() {
+        textEditGeneration &+= 1
         super.didChangeText()
         if inlinePanel != nil {
-            inlineAnchor = min(max(0, inlineAnchor), max(0, (string as NSString).length - 1))
+            inlineAnchor = min(max(0, inlineAnchor), (textStorage?.length ?? 0))
             invalidateInlineLayout()
         }
     }
 
-    @objc private func attachSelectionToAI(_ sender: Any?) {
-        commitComposition()
-        guard selectedRange().length > 0 else { return }
-        NotificationCenter.default.post(name: Notification.Name("aiAttachSelection"), object: (string as NSString).substring(with: selectedRange()))
-    }
+    @objc private func attachSelectionToAI(_ sender: Any?) { EditorToolRegistry.perform("ai.attachSelection", on: self) }
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(openInlineAI(_:)) { return isEditable }
         if menuItem.action == #selector(attachSelectionToAI(_:)) { return selectedRange().length > 0 }
@@ -331,8 +682,14 @@ final class NativeManuscriptTextView: NSTextView, NSLayoutManagerDelegate {
     @objc private func formatSelection(_ sender: NSMenuItem) {
         let types: [MarkdownFormatType] = [.bold, .italic, .underline, .strikethrough]
         guard types.indices.contains(sender.tag) else { return }
-        execute(EditorCommand(.format(types[sender.tag])))
+        EditorToolRegistry.perform("format.\(types[sender.tag])", on: self)
     }
+}
+
+/// Presentation-only paragraph spacing: no attachment characters enter saved text.
+private final class ManuscriptLayoutFragment: NSTextLayoutFragment {
+    var panelHeight: CGFloat = 0
+    override var bottomMargin: CGFloat { super.bottomMargin + panelHeight }
 }
 
 final class NativeManuscriptRuler: NSRulerView {
@@ -342,24 +699,10 @@ final class NativeManuscriptRuler: NSRulerView {
     }
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func drawHashMarksAndLabels(in rect: NSRect) {
-        guard let view = scrollView?.documentView as? NativeManuscriptTextView,
-              let manager = view.layoutManager, let container = view.textContainer else { return }
+        guard let view = scrollView?.documentView as? NativeManuscriptTextView else { return }
         NSColor.windowBackgroundColor.setFill(); bounds.fill()
-        let visible = view.visibleRect.offsetBy(dx: -view.textContainerOrigin.x, dy: -view.textContainerOrigin.y)
-        let glyphs = manager.glyphRange(forBoundingRect: visible, in: container)
-        let chars = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-        let first = view.line(at: chars.location)
-        let last = view.line(at: NSMaxRange(chars))
         let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor]
-        for row in first...last {
-            let offset = view.lineStarts[row]
-            var fragment: NSRect
-            if offset == (view.string as NSString).length { fragment = manager.extraLineFragmentRect }
-            else {
-                let glyph = manager.glyphIndexForCharacter(at: offset)
-                fragment = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
-            }
-            fragment = view.manuscriptRect(fragment)
+        for (row, fragment) in view.visibleManuscriptLines() {
             let point = convert(NSPoint(x: 0, y: fragment.minY + view.textContainerOrigin.y), from: view)
             let label = "\(row + 1)" as NSString
             label.draw(at: NSPoint(x: ruleThickness - label.size(withAttributes: attributes).width - 8, y: point.y + max(0, (fragment.height - label.size(withAttributes: attributes).height) / 2)), withAttributes: attributes)
@@ -373,6 +716,11 @@ final class NativeManuscriptRuler: NSRulerView {
 
 final class NativeManuscriptHost: NSScrollView {
     var textView: NativeManuscriptTextView { documentView as! NativeManuscriptTextView }
+    override func tile() {
+        super.tile()
+        // Sidebar/assistant animation can resize the clip view without text edits.
+        documentView?.needsLayout = true
+    }
     override func accessibilityChildren() -> [Any]? {
         var children = super.accessibilityChildren() ?? []
         if let panel = (documentView as? NativeManuscriptTextView)?.inlinePanel { children.append(panel) }

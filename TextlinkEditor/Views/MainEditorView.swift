@@ -222,12 +222,17 @@ struct MainEditorView: View {
                         .frame(minWidth: 100, maxWidth: .infinity)
                 }
                 .animation(.smooth(duration: 0.22), value: isSearchExpanded)
-                .frame(width: max(300, windowWidth - (columnVisibility == .detailOnly ? 0 : sidebarWidth) - 320))
+                // Reserve window controls and trailing actions independently of sidebar visibility.
+                // Expanding this item when the sidebar closes pushes actions into toolbar overflow.
+                .frame(width: max(300, windowWidth - 570))
             }
             .sharedBackgroundVisibility(.hidden)
 
-            ToolbarSpacer(.flexible, placement: .primaryAction)
-            ToolbarItemGroup(placement: .primaryAction) {
+            // A toolbar Spacer consumes the remaining window width before the action groups.
+            ToolbarItem(placement: .automatic) {
+                Spacer()
+            }
+            ToolbarItemGroup(placement: .automatic) {
                 Menu {
                     Button(L10n.get("writing.workspace")) {
                         writingProject = ProjectSearchPresentation(projectURL: projectManager.currentProject?.path)
@@ -242,18 +247,10 @@ struct MainEditorView: View {
                     Toggle(L10n.get("writing.focus"), isOn: $focusMode)
                 } label: { Label(L10n.get("writing.workspace"), systemImage: "book.closed") }
                 .help(L10n.get("writing.workspace"))
-                Button { openWindow(id: "settings") } label: {
-                    Label(L10n.get("sidebar.settings"), systemImage: "gearshape")
-                }
-                .help(L10n.get("sidebar.settings"))
-                Button { isAIPanelVisible.toggle() } label: {
-                    Label(L10n.ai.togglePanel, systemImage: "sidebar.trailing")
-                }
-                .help(L10n.ai.togglePanel)
             }
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-            if isAIPanelVisible {
-                ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarSpacer(.fixed, placement: .automatic)
+            ToolbarItemGroup(placement: .automatic) {
+                if isAIPanelVisible {
                     Button { assistant.showingHistory = true } label: {
                         Label(L10n.get("ai.workspace.history"), systemImage: "clock")
                     }
@@ -268,6 +265,14 @@ struct MainEditorView: View {
                     .help(L10n.get("ai.workspace.new"))
                     .disabled(!canUseConversationActions)
                 }
+                Button {
+                    withAnimation(.smooth(duration: 0.22)) {
+                        isAIPanelVisible.toggle()
+                    }
+                } label: {
+                    Label(L10n.ai.togglePanel, systemImage: "sidebar.trailing")
+                }
+                .help(L10n.ai.togglePanel)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("editorInlineAI"))) { notification in
@@ -286,8 +291,8 @@ struct MainEditorView: View {
             let revision = ManuscriptRevision(id: UUID(), relativePath: String(path.dropFirst(root.count)), original: native.string,
                 selectionLocation: range.location, selectionLength: range.length)
             let panel = NSHostingView(rootView: InlineAIChatView(projectURL: project, revision: revision, onClose: { [weak native] in
-                native?.closeInlinePanel()
-                if let native { native.window?.makeFirstResponder(native) }
+                guard let native, native.inlinePanel != nil else { return }
+                native.execute(EditorCommand(.tool("ai.inline")))
             }))
             panel.sizingOptions = []
             native.installInlinePanel(panel)

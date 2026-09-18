@@ -419,9 +419,7 @@ struct ShortcutsSettingsView: View {
 
     /// 필터링된 바인딩 목록
     private var filteredBindings: [ShortcutBinding] {
-        // Standard text editing follows the macOS responder chain, not custom bindings.
-        let systemActions: Set<ShortcutAction> = [.undo, .redo, .cut, .copy, .paste, .selectAll]
-        var bindings = shortcutManager.bindings.filter { !systemActions.contains($0.action) }
+        var bindings = shortcutManager.bindings
 
         // 카테고리 필터
         if let category = selectedCategory {
@@ -548,6 +546,7 @@ struct ShortcutsSettingsView: View {
                         Text(binding.action.displayName)
                             .lineLimit(1)
                     }
+                    .background(ShortcutTableScrollBoundary())
                 }
                 .width(min: 100, ideal: 180, max: 300)
             }
@@ -558,6 +557,7 @@ struct ShortcutsSettingsView: View {
                     Text(binding.action.category.displayName)
                         .foregroundStyle(AppColors.textSecondary)
                         .font(.caption)
+                        .background(ShortcutTableScrollBoundary())
                 }
                 .width(min: 60, ideal: 80, max: 120)
             }
@@ -565,30 +565,28 @@ struct ShortcutsSettingsView: View {
             // 단축키 열
             if showShortcutColumn {
                 TableColumn(L10n.get("settings.shortcuts.shortcut")) { binding in
-                    HStack {
-                        if binding.isEnabled {
-                            Text(binding.displayString)
-                                .font(.system(.body, design: .monospaced))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(AppColors.controlBackground)
-                                .cornerRadius(4)
-                        } else {
-                            Text("-")
-                                .foregroundStyle(AppColors.textTertiary)
+                    Button {
+                        editingBinding = binding
+                    } label: {
+                        Group {
+                            if binding.isEnabled {
+                                Text(binding.displayString)
+                                    .font(.system(.body, design: .monospaced))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(AppColors.controlBackground)
+                                    .cornerRadius(4)
+                            } else {
+                                Text("-")
+                                    .foregroundStyle(AppColors.textTertiary)
+                            }
                         }
-
-                        Spacer()
-
-                        Button {
-                            editingBinding = binding
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(AppColors.toolbarIcon)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(binding.action.displayName), \(binding.displayString)")
+                    .help(L10n.get("settings.shortcuts.editTitle"))
+                    .background(ShortcutTableScrollBoundary())
                 }
                 .width(min: 100, ideal: 160, max: 250)
             }
@@ -604,11 +602,41 @@ struct ShortcutsSettingsView: View {
                     ))
                     .toggleStyle(.switch)
                     .controlSize(.small)
+                    .background(ShortcutTableScrollBoundary())
                 }
                 .width(min: 70, ideal: 90, max: 130)
             }
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
+    }
+}
+
+/// Attach inside cells so only this table's enclosing scroll view is configured.
+/// Every column participates because users can hide any of the other columns.
+private struct ShortcutTableScrollBoundary: NSViewRepresentable {
+    func makeNSView(context: Context) -> BoundaryView { BoundaryView() }
+
+    func updateNSView(_ nsView: BoundaryView, context: Context) {
+        nsView.configureScrollView()
+    }
+
+    final class BoundaryView: NSView {
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            configureScrollView()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            configureScrollView()
+        }
+
+        func configureScrollView() {
+            // Avoid rubber-band oscillation at the first and last shortcut rows.
+            enclosingScrollView?.verticalScrollElasticity = .none
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 

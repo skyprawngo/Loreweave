@@ -1,4 +1,10 @@
 {
+  "toolbar.boldItalic": "Bold Italic",
+  "storage.externalSaveTitle": "File changed outside the app",
+  "storage.externalSaveMessage": "The file was changed or deleted outside the app. Would you like to save your edits under a new name?",
+  "storage.saveCopy": "Save As",
+  "storage.externalDeleted": "Deleted externally",
+  "storage.externalConflict": "External changes · save as a new file",
   "ai.workspace.returnToChat": "Return to conversation",
   "app.name": "TextlinkEditor",
   "sidebar.project": "Project",
@@ -373,7 +379,7 @@
   "ai.chat.documentPrompt": "Attached document ({name}):\n{document}\n\nUser request:\n{question}",
   "ai.chat.cancelled": "Request cancelled.",
   "ai.chat.attachCurrentDocument": "Attach current document",
-  "ai.chat.contextDisclosure": "The selected document and referenced conversations are sent. Codex can read the project but cannot modify it.",
+  "ai.chat.contextDisclosure": "The selected manuscript and references are sent. Codex can edit and save project manuscripts when requested.",
   "ai.chat.connectedHint": "CLI installation was detected. Authentication is checked on the first request.",
   "ai.error.authentication": "CLI authentication is required. Log in to the selected CLI in Terminal and try again.",
   "ai.error.incompatibleCLI": "The installed CLI does not support the required options. Update it using the official installation guide and try again.",
@@ -587,5 +593,10 @@
   "ai.inline.allHistory": "All",
   "ai.inline.chatHistory": "Conversations",
   "ai.inline.applied": "Applied to the manuscript. You can Undo this edit.",
-  "ai.inline.invalidEdit": "No valid edit was returned. The manuscript was not changed. Review the record and try again."
+  "ai.inline.invalidEdit": "No valid edit was returned. The manuscript was not changed. Review the record and try again.",
+  "revision.savedExplanation": "Manuscripts saved before and after this run. Concurrent manual or external edits may also be included.",
+  "revision.noChanges": "No manuscript files changed.",
+  "revision.file": "File",
+  "revision.saved": "Saved result",
+  "revision.fileAbsent": "File absent"
 }

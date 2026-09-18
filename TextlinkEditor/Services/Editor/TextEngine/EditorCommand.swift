@@ -6,6 +6,8 @@ struct EditorCommand: Identifiable {
     let action: Action
 
     enum Action {
+        case tool(String)
+        case assistantDraft(String)
         case locate(line: Int, query: String)
         case format(MarkdownFormatType)
         case find(String, forward: Bool)
@@ -66,6 +68,9 @@ extension EditorState {
 
     func execute(_ command: EditorCommand) {
         switch command.action {
+        case .tool: return
+        case .assistantDraft(let action):
+            NotificationCenter.default.post(name: Notification.Name("aiDraftAction"), object: action)
         case .locate(let line, let query):
             selection.moveCursor(to: TextPosition(line: max(0, min(line, document.lineCount - 1)), column: 0))
             _ = find(query, forward: true)
