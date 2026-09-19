@@ -82,7 +82,7 @@ struct TabBarView: View {
         .frame(height: 36)
         .background(TabContextMenuRegion(priority: 0, actions: [
             .init(title: L10n.get("explorer.newFile"), enabled: fileSystemManager.targetDirectoryForNewFile != nil,
-                  perform: showNewFileDialog)
+                  actionID: ShortcutAction.newFile.rawValue, perform: showNewFileDialog)
         ]))
         .animation(.smooth(duration: 0.24), value: tabManager.selectedTabIndex)
     }
@@ -232,7 +232,7 @@ struct TabItemView: View {
         .onTapGesture { if !isRenaming { onSelect() } }
         .background(TabContextMenuRegion(priority: 1, actions: [
             .init(title: L10n.get("explorer.rename"), enabled: fileExists, perform: { isRenaming = true }),
-            .init(title: L10n.tabs.close, perform: onClose)
+            .init(title: L10n.tabs.close, actionID: ShortcutAction.closeTab.rawValue, perform: onClose)
         ]))
         .onHover { hovering in
             isHovering = hovering
@@ -259,6 +259,7 @@ private struct TabContextMenuRegion: NSViewRepresentable {
     struct Action {
         let title: String
         var enabled = true
+        var actionID: String?
         let perform: () -> Void
     }
     let priority: Int
@@ -293,6 +294,12 @@ private struct TabContextMenuRegion: NSViewRepresentable {
                     menu.autoenablesItems = false
                     for (index, action) in region.actions.enumerated() {
                         let item = NSMenuItem(title: action.title, action: #selector(RegionView.invoke(_:)), keyEquivalent: "")
+                        if let actionID = action.actionID,
+                           let binding = KeyboardShortcutManager.shared.binding(for: ShortcutAction(rawValue: actionID)),
+                           let keyEquivalent = binding.menuKeyEquivalent {
+                            item.keyEquivalent = keyEquivalent
+                            item.keyEquivalentModifierMask = binding.modifiers.appKitModifierFlags
+                        }
                         item.target = region
                         item.tag = index
                         item.isEnabled = action.enabled

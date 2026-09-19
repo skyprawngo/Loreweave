@@ -145,7 +145,8 @@ struct CollaborationStore {
         // The submitted content identifies a batch, not a moving collaboration
         // baseline. Git may observe the same input after an app task advanced it.
         let submitted = changes.map { CollaborationChange(path: $0.path, before: nil, after: $0.after) }
-        let fingerprint = try changes.isEmpty ? CollaborationHash.text(instruction + (anchor?.version ?? "") + (anchor?.path ?? "") + id.uuidString) : CollaborationHash.changes(submitted)
+        var fingerprint = try changes.isEmpty ? CollaborationHash.text(instruction + (anchor?.version ?? "") + (anchor?.path ?? "") + id.uuidString) : CollaborationHash.changes(submitted)
+        if origin == "gitInstruction" { fingerprint = CollaborationHash.text(fingerprint + instruction) }
         var result = id
         try update { state in
             if !changes.isEmpty, let existing = state.tasks.first(where: {

@@ -107,6 +107,8 @@ final class FileSystemManager {
             let contents = try files.children(at: item.url)
 
             var newChildren: [FileSystemItem] = []
+            var folderCount = 0
+            var fileCount = 0
             let folderIcons: [String: String]
             if let projectRootURL {
                 do { folderIcons = try FolderAppearanceStore(projectURL: projectRootURL).load() }
@@ -121,16 +123,22 @@ final class FileSystemManager {
             })
 
             for url in contents {
+                let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey])
+                let isDirectory = resourceValues.isDirectory ?? false
                 let standardizedPath = WorkspaceFileIdentity.key(url)
                 // 기존 항목이 있으면 재사용 (상태 유지)
                 if let existing = existingByPath[standardizedPath] {
                     newChildren.append(existing)
                 } else {
                     // 새 항목만 생성
-                    let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey])
-                    let isDirectory = resourceValues.isDirectory ?? false
                     let child = FileSystemItem(url: url, isDirectory: isDirectory, parent: item)
                     newChildren.append(child)
+                }
+
+                if isDirectory {
+                    folderCount += 1
+                } else {
+                    fileCount += 1
                 }
             }
 
@@ -142,11 +150,40 @@ final class FileSystemManager {
                 }
             }
             item.children = newChildren
+            item.childFolderCount = folderCount
+            item.childFileCount = fileCount
             item.sortChildren()
+            // A child is displayed before it is expanded, so obtain its direct counts
+            // now without materializing its children or changing its expansion state.
+            for child in newChildren where child.isDirectory {
+                loadDirectChildCounts(of: child)
+            }
             revision += 1
             watchDirectory(item)
         } catch {
             print("Failed to load directory contents: \(error)")
+            operationError = error.localizedDescription
+        }
+    }
+
+    /// Loads only the immediate counts used by the sidebar badge. This intentionally
+    /// does not populate `children`, preserving the tree's lazy expansion behavior.
+    private func loadDirectChildCounts(of item: FileSystemItem) {
+        do {
+            let contents = try files.children(at: item.url)
+            var folderCount = 0
+            var fileCount = 0
+            for url in contents {
+                let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey])
+                if resourceValues.isDirectory == true {
+                    folderCount += 1
+                } else {
+                    fileCount += 1
+                }
+            }
+            item.childFolderCount = folderCount
+            item.childFileCount = fileCount
+        } catch {
             operationError = error.localizedDescription
         }
     }
@@ -195,6 +232,7 @@ final class FileSystemManager {
                 parent.children = []
             }
             parent.children?.append(newItem)
+            parent.childFolderCount += 1
             parent.sortChildren()
             revision += 1
             return newItem
@@ -220,6 +258,7 @@ final class FileSystemManager {
                 parent.children = []
             }
             parent.children?.append(newItem)
+            parent.childFileCount += 1
             parent.sortChildren()
             revision += 1
             return newItem
@@ -269,6 +308,7 @@ final class FileSystemManager {
             // 부모의 children에서 제거 (UI 정리)
             if let parent = item.parent {
                 parent.children?.removeAll { $0.id == item.id }
+                decrementChildCount(for: item, in: parent)
             }
             return true // 이미 없으므로 성공으로 처리
         }
@@ -283,6 +323,7 @@ final class FileSystemManager {
             // 부모의 children에서 제거
             if let parent = item.parent {
                 parent.children?.removeAll { $0.id == item.id }
+                decrementChildCount(for: item, in: parent)
             }
 
             return true
@@ -312,6 +353,14 @@ final class FileSystemManager {
         return FileManager.default.fileExists(atPath: targetURL.path)
     }
 
+    private func decrementChildCount(for item: FileSystemItem, in parent: FileSystemItem) {
+        if item.isDirectory {
+            parent.childFolderCount = max(0, parent.childFolderCount - 1)
+        } else {
+            parent.childFileCount = max(0, parent.childFileCount - 1)
+        }
+    }
+
     /// 항목 이동
     @discardableResult
     func move(_ item: FileSystemItem, to destination: FileSystemItem) -> Bool {
@@ -338,6 +387,7 @@ final class FileSystemManager {
             // 이전 부모에서 제거
             if let oldParent = item.parent {
                 oldParent.children?.removeAll { $0.id == item.id }
+                decrementChildCount(for: item, in: oldParent)
             }
 
             // 새 부모에 추가 (새로고침으로 처리)

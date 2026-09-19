@@ -111,6 +111,15 @@ struct ModifierKeys: OptionSet, Codable, Hashable {
         return modifiers
     }
 
+    var appKitModifierFlags: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if contains(.command) { flags.insert(.command) }
+        if contains(.shift) { flags.insert(.shift) }
+        if contains(.option) { flags.insert(.option) }
+        if contains(.control) { flags.insert(.control) }
+        return flags
+    }
+
     /// 표시용 문자열 (예: "⌘⇧")
     var displayString: String {
         var symbols: [String] = []
@@ -138,6 +147,19 @@ struct ShortcutBinding: Codable, Identifiable, Equatable {
         if key.isEmpty { return "—" }
         let keyDisplay = key.count == 1 ? key.uppercased() : key.capitalized
         return "\(modifiers.displayString)\(keyDisplay)"
+    }
+
+    /// AppKit menu items use characters rather than `KeyEquivalent` values.
+    var menuKeyEquivalent: String? {
+        guard isEnabled else { return nil }
+        switch key.lowercased() {
+        case "return", "enter": return "\r"
+        case "tab": return "\t"
+        case "space": return " "
+        case "delete", "backspace": return "\u{8}"
+        case "escape", "esc": return "\u{1b}"
+        default: return key.count == 1 ? key.lowercased() : nil
+        }
     }
 
     /// SwiftUI KeyboardShortcut으로 변환
@@ -329,6 +351,22 @@ final class KeyboardShortcutManager {
     /// 특정 액션의 단축키 바인딩 가져오기
     func binding(for action: ShortcutAction) -> ShortcutBinding? {
         bindings.first { $0.action == action }
+    }
+
+    /// The single presentation path for toolbar help and AppKit context menus.
+    func displayShortcut(for actionID: String) -> String? {
+        guard let binding = binding(for: ShortcutAction(rawValue: actionID)),
+              binding.isEnabled, !binding.key.isEmpty else { return nil }
+        return binding.displayString
+    }
+
+    func helpText(title: String, actionID: String) -> String {
+        guard let shortcut = displayShortcut(for: actionID) else { return title }
+        return "\(title) (\(shortcut))"
+    }
+
+    func toolHelpText(_ toolID: String) -> String {
+        helpText(title: EditorToolRegistry.title(for: toolID), actionID: toolID)
     }
 
     /// 단축키 바인딩 업데이트

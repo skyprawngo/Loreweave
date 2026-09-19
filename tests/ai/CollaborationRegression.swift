@@ -146,6 +146,11 @@ func checkCollaboration(in folder: URL) async throws {
     let delayedGit = try store.enqueue(origin: "git", instruction: "late Git observation",
         changes: [.init(path: "원고.md", before: "AI has advanced baseline", after: "new")])
     check(first == delayedGit, "late Git observation deduplicates after baseline advances")
+    let directed = try store.enqueue(origin: "gitInstruction", instruction: "keep the twist", changes: changes)
+    let repeated = try store.enqueue(origin: "gitInstruction", instruction: "keep the twist", changes: changes)
+    let different = try store.enqueue(origin: "gitInstruction", instruction: "reveal the twist", changes: changes)
+    check(directed == repeated, "identical change instructions deduplicate")
+    check(directed != different && directed != first, "distinct author decisions retain separate tasks")
     check(!CollaborationStore.validPath("../outside.md") && !CollaborationStore.validPath(".git/config.md")
           && !CollaborationStore.validPath("image.png"), "unsafe and nontext targets rejected")
     let outside = folder.appendingPathComponent("outside.md")

@@ -111,6 +111,7 @@ struct MainEditorView: View {
     private var fileSystemManager: FileSystemManager { FileSystemManager.shared }
     @State private var tabManager = EditorTabManager.shared
     @State private var assistant = AIAssistantViewModel.shared
+    @State private var git = ProjectGitModel()
 
     // AI 패널 크기
     @State private var panelDragStartWidth: CGFloat?
@@ -140,18 +141,12 @@ struct MainEditorView: View {
         min(aiPanelWidth, max(280, windowWidth - (columnVisibility == .detailOnly ? 0 : sidebarWidth) - 360))
     }
 
-    private var canUseConversationActions: Bool {
-        guard UserSettings.shared.aiAssistantEnabled, !assistant.isProcessing else { return false }
-        if case .connected = assistant.connectionState { return true }
-        return false
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             // 메인 콘텐츠 (NavigationSplitView)
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 // 사이드바 (ProjectExplorerView)
-                ProjectExplorerView()
+                ProjectExplorerView(git: git, collaboration: assistant.collaboration)
                     .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebarWidth = $0 }
             } detail: {
@@ -176,17 +171,24 @@ struct MainEditorView: View {
                         panelDragStartWidth = nil
                     })
                 // Hiding a panel must not recreate its account/chat state or cancel its request.
-                AIAssistantView(
+                ZStack {
+                    AIAssistantView(
                     projectFolderURL: projectManager.currentProject?.path,
                     isInDetailView: $isAIDetailView
-                )
+                    )
+                    .opacity(assistant.collaboration.showingPanel ? 0 : 1)
+                    .accessibilityHidden(assistant.collaboration.showingPanel)
+                    .allowsHitTesting(!assistant.collaboration.showingPanel)
+                    if assistant.collaboration.showingPanel {
+                        CollaborationView(coordinator: assistant.collaboration, git: git)
+                    }
+                }
                 .frame(width: resolvedAIPanelWidth)
             }
             .frame(width: resolvedAIPanelWidth + 7)
             // Keep the panel alive, but resize the editor once rather than on every animation frame.
             .frame(width: isAIPanelVisible ? resolvedAIPanelWidth + 7 : 0, alignment: .trailing)
             .clipped()
-            .animation(.smooth(duration: 0.22), value: isAIPanelVisible)
             .accessibilityHidden(!isAIPanelVisible)
             .allowsHitTesting(isAIPanelVisible)
         }
@@ -250,27 +252,19 @@ struct MainEditorView: View {
             }
             ToolbarSpacer(.fixed, placement: .automatic)
             ToolbarItemGroup(placement: .automatic) {
-                if isAIPanelVisible {
-                    Button { assistant.showingHistory = true } label: {
-                        Label(L10n.get("ai.workspace.history"), systemImage: "clock")
-                    }
-                    .help(L10n.get("ai.workspace.history"))
-                    .disabled(!canUseConversationActions)
-                    Button {
-                        assistant.selectedCardId = nil
-                        assistant.showingHistory = false
-                    } label: {
-                        Label(L10n.get("ai.workspace.new"), systemImage: "square.and.pencil")
-                    }
-                    .help(L10n.get("ai.workspace.new"))
-                    .disabled(!canUseConversationActions)
-                }
                 Button {
-                    withAnimation(.smooth(duration: 0.22)) {
-                        isAIPanelVisible.toggle()
-                    }
+                    if isAIPanelVisible && assistant.collaboration.showingPanel { isAIPanelVisible = false }
+                    else { assistant.collaboration.showingPanel = true; isAIPanelVisible = true }
                 } label: {
-                    Label(L10n.ai.togglePanel, systemImage: "sidebar.trailing")
+                    Label(L10n.get("git.openCollaboration"), systemImage: "person.2.wave.2")
+                }
+                .help(L10n.get("git.openCollaboration"))
+                .accessibilityLabel(L10n.get("git.openCollaboration"))
+                Button {
+                    if assistant.collaboration.showingPanel { assistant.collaboration.showingPanel = false; isAIPanelVisible = true }
+                    else { isAIPanelVisible.toggle() }
+                } label: {
+                    Label(L10n.ai.togglePanel, systemImage: "bubble.left.and.bubble.right")
                 }
                 .help(L10n.ai.togglePanel)
             }
@@ -303,6 +297,7 @@ struct MainEditorView: View {
             do {
                 try AIContextSelection.shared.captureSelection(text, sourceURL: tab.url, projectURL: project)
                 contextProject = ProjectSearchPresentation(projectURL: project)
+                assistant.collaboration.showingPanel = false
                 isAIPanelVisible = true
             } catch { fileSystemManager.operationError = error.localizedDescription }
         }
@@ -338,6 +333,7 @@ struct MainEditorView: View {
             Button(L10n.common.confirm) { fileSystemManager.operationError = nil }
         } message: { Text(fileSystemManager.operationError ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aiDraftAction"))) { notification in
+            assistant.collaboration.showingPanel = false
             if !isAIPanelVisible {
                 isAIPanelVisible = true
                 DispatchQueue.main.async { NotificationCenter.default.post(notification) }
@@ -373,11 +369,16 @@ struct MainEditorView: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         .onDisappear {
+            git.setProject(nil)
             assistant.setProject(nil)
             fileSystemManager.closeProject()
         }
         .onChange(of: projectManager.currentProject?.path) { _, path in
+            git.setProject(path)
             assistant.setProject(path)
+        }
+        .onChange(of: assistant.collaboration.showingPanel) { _, showing in
+            if showing { isAIPanelVisible = true }
         }
         .appCommandHandler(
             appCommands: appCommands,
@@ -395,6 +396,7 @@ struct MainEditorView: View {
     private func initializeFileSystem() {
         guard let projectPath = projectManager.currentProject?.path else { return }
         assistant.setProject(projectPath)
+        git.setProject(projectPath)
         fileSystemManager.initializeProject(at: projectPath)
     }
 

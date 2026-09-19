@@ -11,8 +11,8 @@ import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general
-    case ai
     case editor
+    case ai
     case shortcuts
     case developer
 
@@ -21,8 +21,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: return L10n.get("settings.general")
-        case .ai: return L10n.get("settings.ai")
         case .editor: return L10n.sidebar.editor
+        case .ai: return L10n.get("settings.ai")
         case .shortcuts: return L10n.get("settings.shortcuts")
         case .developer: return L10n.get("settings.developer")
         }
@@ -31,8 +31,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gearshape"
-        case .ai: return "sparkles"
         case .editor: return "doc.text"
+        case .ai: return "sparkles"
         case .shortcuts: return "keyboard"
         case .developer: return "hammer"
         }
@@ -77,6 +77,8 @@ struct GeneralSettingsView: View {
     @State private var launchBehavior = UserSettings.shared.appLaunchBehavior
     @State private var appTheme = UserSettings.shared.appTheme
     @State private var appFontName = UserSettings.shared.appFontName
+    @AppStorage(SidebarAppearance.textSizeKey, store: SidebarAppearance.store) private var sidebarTextSize = SidebarAppearance.defaultTextSize
+    @AppStorage(SidebarAppearance.iconSizeKey, store: SidebarAppearance.store) private var sidebarIconSize = SidebarAppearance.defaultIconSize
     @State private var permissionManager = PermissionManager.shared
     @State private var projectManager = ProjectManager.shared
 
@@ -200,6 +202,13 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            Section(L10n.get("settings.sidebar.title")) {
+                sidebarSizeRow(L10n.get("settings.sidebar.textSize"), value: $sidebarTextSize,
+                               range: SidebarAppearance.textSizeRange)
+                sidebarSizeRow(L10n.get("settings.sidebar.iconSize"), value: $sidebarIconSize,
+                               range: SidebarAppearance.iconSizeRange)
+            }
+
             // 이용약관
             Section {
                 Button {
@@ -274,6 +283,19 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func sidebarSizeRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(Int(value.wrappedValue.rounded())) pt")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Slider(value: value, in: range, step: 1)
+        }
     }
 
     /// 앱 전역 폰트 선택 패널 표시

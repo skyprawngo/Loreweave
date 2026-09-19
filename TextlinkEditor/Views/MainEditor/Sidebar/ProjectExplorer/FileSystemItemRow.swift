@@ -36,8 +36,12 @@ struct FileSystemItemRow: View {
     @State private var isShowingFolderOptions = false
     @FocusState private var isTextFieldFocused: Bool
     @FocusState private var isRowFocused: Bool
+    @AppStorage(SidebarAppearance.textSizeKey, store: SidebarAppearance.store) private var storedTextSize = SidebarAppearance.defaultTextSize
+    @AppStorage(SidebarAppearance.iconSizeKey, store: SidebarAppearance.store) private var storedIconSize = SidebarAppearance.defaultIconSize
 
     private let fileSystemManager = FileSystemManager.shared
+    private var textSize: Double { SidebarAppearance.bounded(storedTextSize, in: SidebarAppearance.textSizeRange, fallback: SidebarAppearance.defaultTextSize) }
+    private var iconSize: Double { SidebarAppearance.bounded(storedIconSize, in: SidebarAppearance.iconSizeRange, fallback: SidebarAppearance.defaultIconSize) }
 
     /// 행 배경색 (파인더 스타일)
     private var rowBackgroundColor: Color {
@@ -87,7 +91,7 @@ struct FileSystemItemRow: View {
 
             // 아이콘
             Image(systemName: item.iconName)
-                .font(.system(size: 13))
+                .font(.system(size: iconSize))
                 .foregroundStyle(iconColor)
                 .frame(width: 16)
 
@@ -96,7 +100,7 @@ struct FileSystemItemRow: View {
                 editingTextField
             } else {
                 Text(item.name)
-                    .font(.system(size: 12))
+                    .font(.system(size: textSize))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -105,13 +109,21 @@ struct FileSystemItemRow: View {
 
             // 폴더인 경우 하위 항목 개수 표시
             if item.isDirectory && item.childCount > 0 {
-                Text("\(item.childCount)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(AppColors.textTertiary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(AppColors.controlBackground.opacity(0.5))
-                    .clipShape(Capsule())
+                HStack(spacing: 2) {
+                    if item.childFolderCount > 0 {
+                        Text("\(item.childFolderCount)")
+                            .foregroundStyle(AppColors.accent)
+                    }
+                    if item.childFileCount > 0 {
+                        Text("\(item.childFileCount)")
+                            .foregroundStyle(AppColors.textPrimary)
+                    }
+                }
+                .font(.system(size: max(8, textSize - 2), design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(AppColors.controlBackground.opacity(0.5))
+                .clipShape(Capsule())
             }
         }
         .padding(.vertical, 3)
@@ -159,10 +171,10 @@ struct FileSystemItemRow: View {
         .draggable(item.url.absoluteString) {
             HStack(spacing: 4) {
                 Image(systemName: item.iconName)
-                    .font(.system(size: 13))
+                    .font(.system(size: iconSize))
                     .foregroundStyle(iconColor)
                 Text(item.name)
-                    .font(.system(size: 12))
+                    .font(.system(size: textSize))
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -213,7 +225,7 @@ struct FileSystemItemRow: View {
     private var expandButton: some View {
         Button(action: { toggleExpand() }) {
             Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: max(8, iconSize - 3), weight: .medium))
                 .foregroundStyle(AppColors.toolbarIcon)
                 .frame(width: 16, height: 16)
                 .rotationEffect(.degrees(item.isExpanded ? 90 : 0))
@@ -233,7 +245,7 @@ struct FileSystemItemRow: View {
             onCancel: { cancelEditing() },
             onFocusLost: { finishEditing() }
         )
-        .font(.system(size: 12))
+        .font(.system(size: textSize))
         .focused($isTextFieldFocused)
     }
 

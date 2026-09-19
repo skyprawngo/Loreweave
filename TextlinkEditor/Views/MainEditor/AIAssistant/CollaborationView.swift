@@ -2,8 +2,8 @@ import SwiftUI
 
 struct CollaborationView: View {
     @Bindable var coordinator: CollaborationCoordinator
+    @Bindable var git: ProjectGitModel
     @State private var comment = ""
-    @State private var selected: Set<String> = []
     @State private var roots = ""
     @State private var answers: [String: String] = [:]
     @State private var reviewTask: CollaborationTaskRecord?
@@ -23,33 +23,17 @@ struct CollaborationView: View {
                             .buttonStyle(.plain).accessibilityLabel(L10n.get("common.close"))
                     }
                 }
-                if !coordinator.document.enabled {
-                    Text(L10n.get("collaboration.introduction")).font(.callout)
-                    configurationView
-                    Button(L10n.get("collaboration.enable")) {
-                        coordinator.enable()
-                    }.buttonStyle(.borderedProminent)
-                } else {
-                    HStack {
-                        Label(L10n.get("collaboration.title"), systemImage: "person.2.wave.2")
-                        Spacer()
-                        if coordinator.isWorking { ProgressView().controlSize(.small) }
-                        Button(L10n.get(coordinator.document.paused ? "collaboration.resume" : "collaboration.pause")) {
-                            coordinator.configure(paused: !coordinator.document.paused)
-                        }.buttonStyle(.borderless)
-                    }
-                    DisclosureGroup(L10n.get("collaboration.configuration"), isExpanded: $configuration) {
-                        configurationView.padding(.top, 8)
-                    }
-                    commentView
-                    pendingView
-                    Divider()
-                    Text(L10n.get("collaboration.tasks")).font(.headline)
-                    if coordinator.document.tasks.isEmpty {
-                        Text(L10n.get("collaboration.empty")).font(.callout).foregroundStyle(.secondary)
-                    }
-                    ForEach(coordinator.document.tasks.reversed()) { task in taskView(task) }
+                ProjectChangeReviewView(model: git, collaboration: coordinator)
+                DisclosureGroup(L10n.get("collaboration.configuration"), isExpanded: $configuration) {
+                    configurationView.padding(.top, 8)
                 }
+                if coordinator.commentAnchor != nil { commentView }
+                Divider()
+                Text(L10n.get("collaboration.tasks")).font(.headline)
+                if coordinator.document.tasks.isEmpty {
+                    Text(L10n.get("collaboration.empty")).font(.callout).foregroundStyle(.secondary)
+                }
+                ForEach(coordinator.document.tasks.reversed()) { task in taskView(task) }
             }.padding(14)
         }
         .onAppear {
@@ -66,6 +50,11 @@ struct CollaborationView: View {
 
     private var configurationView: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !coordinator.document.enabled {
+                Button(L10n.get("collaboration.enable")) { coordinator.enable() }
+            } else {
+                Toggle(L10n.get("git.autoRun"), isOn: Binding(get: { !coordinator.document.paused }, set: { coordinator.configure(paused: !$0) }))
+            }
             Text(L10n.get("collaboration.canonRoots")).font(.caption)
             TextField(L10n.get("collaboration.canonRoots"), text: $roots)
                 .textFieldStyle(.roundedBorder)
@@ -109,26 +98,6 @@ struct CollaborationView: View {
                 coordinator.submitComment(comment, anchor: coordinator.commentAnchor)
                 if coordinator.error == nil { comment = "" }
             }.disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
-    }
-
-    private var pendingView: some View {
-        DisclosureGroup(L10n.get("collaboration.pending")) {
-            VStack(alignment: .leading, spacing: 8) {
-                Button(L10n.get("collaboration.refresh")) {
-                    do { try coordinator.refresh() } catch { coordinator.error = error.localizedDescription }
-                }
-                ForEach(coordinator.pending) { change in
-                    Toggle(change.path, isOn: Binding(
-                        get: { selected.contains(change.path) },
-                        set: { if $0 { selected.insert(change.path) } else { selected.remove(change.path) } }))
-                        .font(.callout)
-                }
-                Button(L10n.get("collaboration.submitChanges")) {
-                    coordinator.submitChanges(selected)
-                    if coordinator.error == nil { selected = [] }
-                }.disabled(selected.isEmpty)
-            }.padding(.top, 8)
         }
     }
 

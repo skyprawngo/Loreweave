@@ -15,6 +15,9 @@ final class FileSystemItem: Identifiable, Hashable {
     var name: String
     let isDirectory: Bool
     var children: [FileSystemItem]?
+    /// 디렉터리를 펼치지 않아도 표시할 직접 하위 폴더/파일 수
+    var childFolderCount: Int = 0
+    var childFileCount: Int = 0
     var isExpanded: Bool
     var customFolderIcon: String?
 
@@ -87,7 +90,7 @@ final class FileSystemItem: Identifiable, Hashable {
 
     /// 하위 항목 개수 (폴더인 경우만)
     var childCount: Int {
-        children?.count ?? 0
+        childFolderCount + childFileCount
     }
 
     /// 상대 경로 (프로젝트 루트 기준)

@@ -36,6 +36,8 @@ struct ProjectExplorerView: View {
     /// 마지막으로 단일 선택된 항목 ID (Shift 범위 선택의 기준점)
     @State private var lastSelectedItemId: UUID?
     @State private var isRefreshing: Bool = false
+    @AppStorage(SidebarAppearance.textSizeKey, store: SidebarAppearance.store) private var storedTextSize = SidebarAppearance.defaultTextSize
+    @AppStorage(SidebarAppearance.iconSizeKey, store: SidebarAppearance.store) private var storedIconSize = SidebarAppearance.defaultIconSize
 
     /// 캐시된 플랫 리스트 (렌더링 + Shift 범위 선택용)
     @State private var flatList: [FlatFileItem] = []
@@ -49,6 +51,10 @@ struct ProjectExplorerView: View {
 
     /// EditorView에서 현재 편집 중인 내용을 가져오기 위한 콜백
     var getCurrentEditorContent: (() -> String?)?
+    var git: ProjectGitModel?
+    var collaboration: CollaborationCoordinator?
+    private var textSize: Double { SidebarAppearance.bounded(storedTextSize, in: SidebarAppearance.textSizeRange, fallback: SidebarAppearance.defaultTextSize) }
+    private var iconSize: Double { SidebarAppearance.bounded(storedIconSize, in: SidebarAppearance.iconSizeRange, fallback: SidebarAppearance.defaultIconSize) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,6 +109,7 @@ struct ProjectExplorerView: View {
             .frame(maxHeight: .infinity)
 
             // 설정 버튼 (하단)
+            if let git, let collaboration { ProjectGitSidebar(model: git, collaboration: collaboration) }
             settingsFooter
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -128,7 +135,7 @@ struct ProjectExplorerView: View {
     private var explorerHeader: some View {
         HStack {
             Text(projectManager.currentProject?.name ?? L10n.sidebar.project)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: max(10, textSize - 1), weight: .semibold))
                 .foregroundStyle(AppColors.sidebarHeaderText)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -139,7 +146,7 @@ struct ProjectExplorerView: View {
             // 새 파일 버튼
             Button(action: { showNewFileDialog() }) {
                 Image(systemName: "doc.badge.plus")
-                    .font(.system(size: 12))
+                    .font(.system(size: iconSize))
                     .foregroundStyle(AppColors.toolbarIcon)
                     .frame(width: 24, height: 26)
             }
@@ -151,7 +158,7 @@ struct ProjectExplorerView: View {
             // 새 폴더 버튼
             Button(action: { showNewFolderDialog() }) {
                 Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 12))
+                    .font(.system(size: iconSize))
                     .foregroundStyle(AppColors.toolbarIcon)
                     .frame(width: 24, height: 26)
             }
@@ -168,7 +175,7 @@ struct ProjectExplorerView: View {
                         .frame(width: 12, height: 12)
                 } else {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11))
+                        .font(.system(size: iconSize))
                         .foregroundStyle(AppColors.toolbarIcon)
                 }
             }
@@ -189,7 +196,7 @@ struct ProjectExplorerView: View {
             Spacer()
             Button(action: { openWindow(id: "settings") }) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 14))
+                    .font(.system(size: iconSize))
                     .foregroundStyle(AppColors.toolbarIcon)
             }
             .buttonStyle(.plain)
@@ -204,11 +211,11 @@ struct ProjectExplorerView: View {
     private var emptyStateView: some View {
         VStack(spacing: 8) {
             Image(systemName: "folder")
-                .font(.system(size: 24))
+                .font(.system(size: iconSize + 11))
                 .foregroundStyle(AppColors.toolbarIcon)
 
             Text(L10n.get("explorer.emptyFolder"))
-                .font(.system(size: 11))
+                .font(.system(size: max(10, textSize - 1)))
                 .foregroundStyle(AppColors.textTertiary)
 
             Button(action: { showNewFileDialog() }) {

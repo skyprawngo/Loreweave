@@ -61,6 +61,7 @@ enum EditorToolRegistry {
     }
 
     static func definition(_ id: String) -> EditorToolDefinition? { tools.first { $0.id == id } }
+    static func title(for id: String) -> String { definition(id).map { L10n.get($0.titleKey) } ?? id }
     @discardableResult static func perform(_ id: String, on target: EditorToolTarget) -> Bool {
         guard let definition = definition(id) else { return false }
         target.runTool(definition)

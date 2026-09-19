@@ -125,6 +125,17 @@ final class CollaborationCoordinator {
         }
     }
 
+    func submitVersionChange(path: String, before: String?, after: String?, instruction: String) {
+        perform { store in
+            guard CollaborationStore.validPath(path), !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CollaborationFailure.unsafePath }
+            guard try store.snapshot()[path] == after else { throw CollaborationFailure.conflict }
+            if !(try store.load().enabled) { try store.enable() }
+            try store.enqueue(origin: "gitInstruction", instruction: instruction,
+                changes: [.init(path: path, before: before, after: after)])
+            showingPanel = true
+        }
+    }
+
     func captureComment() {
         guard let project, let tab = EditorTabManager.shared.selectedTab else { return }
         do {

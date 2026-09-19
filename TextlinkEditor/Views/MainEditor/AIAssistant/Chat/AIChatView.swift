@@ -510,9 +510,18 @@ struct AIChatView: View {
     }
 
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
+        VStack(spacing: 0) {
+            if selectedCardId == nil {
+                HStack {
+                    iconButton("ai.workspace.history", "chevron.left") { showingHistory = true }
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 20) {
                     if detailMessages.isEmpty {
                         ContentUnavailableView {
                             Label(L10n.get("ai.workspace.new"), systemImage: "bubble.left.and.bubble.right")
@@ -555,16 +564,17 @@ struct AIChatView: View {
                     }
                     Color.clear.frame(height: isInlineRecord ? 0 : composerHeight).id("bottom")
                 }
-                .padding(14)
+                    .padding(14)
+                }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentSize.height - geometry.visibleRect.maxY < 64
+                } action: { _, nearBottom in followsResponse = nearBottom }
+                .onChange(of: selectedCardId) { _, _ in followsResponse = true; proxy.scrollTo("bottom") }
+                .onChange(of: detailMessages.last?.content) { _, _ in
+                    if followsResponse { proxy.scrollTo("bottom") }
+                }
+                .onChange(of: detailMessages.count) { _, _ in proxy.scrollTo("bottom") }
             }
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentSize.height - geometry.visibleRect.maxY < 64
-            } action: { _, nearBottom in followsResponse = nearBottom }
-            .onChange(of: selectedCardId) { _, _ in followsResponse = true; proxy.scrollTo("bottom") }
-            .onChange(of: detailMessages.last?.content) { _, _ in
-                if followsResponse { proxy.scrollTo("bottom") }
-            }
-            .onChange(of: detailMessages.count) { _, _ in proxy.scrollTo("bottom") }
         }
     }
 
@@ -756,7 +766,10 @@ struct AIChatView: View {
             HStack {
                 Text(L10n.get("ai.workspace.history")).font(.headline)
                 Spacer()
-                iconButton("ai.workspace.returnToChat", "chevron.right") { showingHistory = false }
+                iconButton("ai.workspace.new", "plus") {
+                    selectedCardId = nil
+                    showingHistory = false
+                }
             }.padding(16)
             TextField(L10n.get("ai.workspace.searchHistory"), text: $historyQuery)
                 .textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)

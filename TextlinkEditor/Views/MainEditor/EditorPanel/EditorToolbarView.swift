@@ -11,6 +11,7 @@ struct EditorToolbarView: View {
     var onToolAction: ((String) -> Void)?
     @Binding var presentedTool: String?
     @State private var showingFormat = false
+    @State private var shortcuts = KeyboardShortcutManager.shared
     @AppStorage(EditorToolbarAppearance.iconSizeKey, store: EditorToolbarAppearance.store) private var storedIconSize = EditorToolbarAppearance.defaultIconSize
     @AppStorage(EditorToolbarAppearance.heightKey, store: EditorToolbarAppearance.store) private var storedHeight = EditorToolbarAppearance.defaultHeight
     private var iconSize: Double { EditorToolbarAppearance.bounded(storedIconSize, in: EditorToolbarAppearance.sizeRange, fallback: EditorToolbarAppearance.defaultIconSize) }
@@ -96,7 +97,7 @@ struct EditorToolbarView: View {
             Image(systemName: icon).font(.system(size: iconSize)).frame(width: 26, height: 26)
         }
         .buttonStyle(.borderless)
-        .help(title)
+        .help(shortcuts.toolHelpText("format.\(format)"))
         .accessibilityLabel(title)
     }
 
@@ -107,7 +108,7 @@ struct EditorToolbarView: View {
                 .foregroundStyle(isMarkdownPreview ? Color.accentColor : Color.primary)
         }
         .buttonStyle(.borderless)
-        .help(L10n.get(isMarkdownPreview ? "editor.markdown.source" : "editor.markdown.preview"))
+        .help(shortcuts.toolHelpText("display.markdownPreview"))
         .accessibilityLabel(L10n.get("editor.markdown.toggle"))
         .accessibilityValue(L10n.get(isMarkdownPreview ? "editor.markdown.preview" : "editor.markdown.source"))
     }
@@ -130,6 +131,7 @@ struct EditorToolbarView: View {
 }
 
 private struct FontSizeControl: View {
+    @State private var shortcuts = KeyboardShortcutManager.shared
     @AppStorage(EditorToolbarAppearance.numberSizeKey, store: EditorToolbarAppearance.store) private var storedNumberSize = EditorToolbarAppearance.defaultNumberSize
     private var numberSize: Double { EditorToolbarAppearance.bounded(storedNumberSize, in: EditorToolbarAppearance.sizeRange, fallback: EditorToolbarAppearance.defaultNumberSize) }
     @Binding var fontSize: CGFloat
@@ -142,11 +144,12 @@ private struct FontSizeControl: View {
             Text("pt").font(.system(size: numberSize)).foregroundStyle(.secondary)
         }
         .fixedSize()
-        .help(L10n.editor.fontSize)
+        .help(shortcuts.toolHelpText("display.fontSize"))
     }
 }
 
 private struct LetterSpacingControl: View {
+    @State private var shortcuts = KeyboardShortcutManager.shared
     @AppStorage(EditorToolbarAppearance.iconSizeKey, store: EditorToolbarAppearance.store) private var storedIconSize = EditorToolbarAppearance.defaultIconSize
     private var iconSize: Double { EditorToolbarAppearance.bounded(storedIconSize, in: EditorToolbarAppearance.sizeRange, fallback: EditorToolbarAppearance.defaultIconSize) }
     @Binding var letterSpacing: CGFloat
@@ -159,7 +162,7 @@ private struct LetterSpacingControl: View {
             ScrubbableNumberField(title: L10n.get("editor.letterSpacing"), value: value, range: -5...20, step: 0.1)
         }
         .fixedSize()
-        .help(L10n.get("editor.letterSpacing"))
+        .help(shortcuts.toolHelpText("display.letterSpacing"))
     }
 }
 
@@ -247,6 +250,7 @@ private struct ScrubbableNumberField: View {
 }
 
 private struct LineSpacingControl: View {
+    @State private var shortcuts = KeyboardShortcutManager.shared
     @Binding var lineSpacingOption: LineSpacingOption
     var body: some View {
         Picker(L10n.editor.lineSpacing, selection: $lineSpacingOption) {
@@ -257,11 +261,12 @@ private struct LineSpacingControl: View {
         .labelsHidden()
         .buttonStyle(.borderless)
         .fixedSize(horizontal: true, vertical: false)
-        .help(L10n.editor.lineSpacing)
+        .help(shortcuts.toolHelpText("display.lineSpacing"))
     }
 }
 
 struct FontPickerControl: View {
+    @State private var shortcuts = KeyboardShortcutManager.shared
     @Binding var fontName: String
     @Binding var fontSize: CGFloat
 
@@ -280,7 +285,7 @@ struct FontPickerControl: View {
                 .frame(width: labelWidth, alignment: .leading)
         }
         .buttonStyle(.borderless)
-        .help(L10n.get("settings.editor.fontName"))
+        .help(shortcuts.toolHelpText("display.font"))
         .accessibilityLabel(L10n.get("settings.editor.fontName"))
         .accessibilityValue(fontName)
     }
