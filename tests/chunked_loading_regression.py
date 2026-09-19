@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='textlink-chunk-tests-') as directory:
     path=Path(directory)
     (path/'Checks.swift').write_text(harness)
     subprocess.run(['xcrun','swiftc','-O','-parse-as-library',
-        str(root/'TextlinkEditor/Services/FileSystem/DocumentFileStore.swift'),
+        str(root/'TextlinkEditor/Services/FileSystem/DocumentFileStore.swift'), *[str(p) for p in (root / "TextlinkEditor/Services/FileSystem/Workspace").glob("*.swift")],
         str(root/'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView/PreparedManuscript.swift'),
         str(path/'Checks.swift'),'-o',str(path/'test')],check=True)
     subprocess.run([str(path/'test')],check=True)

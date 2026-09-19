@@ -38,7 +38,7 @@ enum ShortcutAction {
 final class KeyboardShortcutManager {
     static let shared = KeyboardShortcutManager()
     func action(matching event: NSEvent) -> ShortcutAction? {
-        event.keyCode == 34 && event.modifierFlags.intersection([.command, .option, .shift, .control]) == [.command, .option] ? .inline : nil
+        event.keyCode == 34 && event.modifierFlags.intersection([.command, .option, .shift, .control]) == [.command] ? .inline : nil
     }
 }
 final class TextUndoHistoryManager {

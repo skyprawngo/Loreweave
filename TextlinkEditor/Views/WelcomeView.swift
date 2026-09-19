@@ -113,8 +113,8 @@ struct WelcomeView: View {
                 projectName: $newProjectName,
                 selectedDirectory: $selectedDirectory,
                 projectManager: projectManager
-            ) {
-                createNewProject()
+            ) { options in
+                createNewProject(options: options)
             } onCancel: {
                 resetNewProjectState()
             }
@@ -140,11 +140,11 @@ struct WelcomeView: View {
         dismiss()
     }
 
-    private func createNewProject() {
+    private func createNewProject(options: ProjectCreationOptions) {
         guard !newProjectName.trimmingCharacters(in: .whitespaces).isEmpty,
               let directory = selectedDirectory else { return }
 
-        if projectManager.createProject(name: newProjectName, at: directory) != nil {
+        if projectManager.createProject(name: newProjectName, at: directory, options: options) != nil {
             resetNewProjectState()
             isShowingNewProjectSheet = false
             openEditorWindow()
@@ -244,10 +244,12 @@ struct NewProjectSheet: View {
     @Binding var projectName: String
     @Binding var selectedDirectory: URL?
     let projectManager: ProjectManager
-    let onCreate: () -> Void
+    let onCreate: (ProjectCreationOptions) -> Void
     let onCancel: () -> Void
 
     @State private var isShowingCustomExtensionAlert = false
+    @State private var isShowingFolderOptions = false
+    @State private var creationOptions = ProjectCreationOptions()
 
     /// 사용자가 커스텀 확장자를 사용하려는지 확인
     private var hasCustomExtension: Bool {
@@ -267,105 +269,97 @@ struct NewProjectSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text(L10n.get("welcome.newProject"))
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
 
-            // 프로젝트 이름
-            VStack(alignment: .leading, spacing: 6) {
-                Text(L10n.get("welcome.projectName"))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
-
-                HStack(spacing: 0) {
-                    TextField(L10n.get("welcome.projectNamePlaceholder"), text: $projectName)
-                        .textFieldStyle(.roundedBorder)
-
-                    // 커스텀 확장자가 없을 때만 .weaveproj 표시
-                    if !hasCustomExtension {
-                        Text(".\(ProjectManager.projectExtension)")
-                            .font(.system(size: 13))
-                            .foregroundStyle(AppColors.textSecondary)
-                            .padding(.leading, 4)
-                    }
-                }
-
-                // 최종 폴더명 미리보기
-                if !projectName.trimmingCharacters(in: .whitespaces).isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder.fill")
-                            .font(.caption2)
-                        Text(finalFolderName)
-                            .font(.caption)
-                    }
-                    .foregroundStyle(AppColors.textTertiary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L10n.get("welcome.newProject"))
+                        .font(.headline)
+                    Text(L10n.get("welcome.createDescription"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 350)
 
-            // 저장 위치
-            VStack(alignment: .leading, spacing: 6) {
-                Text(L10n.get("welcome.saveLocation"))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                GridRow(alignment: .firstTextBaseline) {
+                    Text(L10n.get("welcome.projectName"))
+                        .gridColumnAlignment(.trailing)
+                    HStack(spacing: 4) {
+                        TextField(L10n.get("welcome.projectNamePlaceholder"), text: $projectName)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel(L10n.get("welcome.projectName"))
+                        if !hasCustomExtension {
+                            Text(".\(ProjectManager.projectExtension)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
 
-                HStack {
-                    if let directory = selectedDirectory {
-                        Text(directory.path)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.primary)
+                GridRow {
+                    Text(L10n.get("welcome.saveLocation"))
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder")
+                            .foregroundStyle(.secondary)
+                        Text(selectedDirectory?.path ?? L10n.get("welcome.noLocationSelected"))
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Text(L10n.get("welcome.noLocationSelected"))
-                            .font(.system(size: 12))
-                            .foregroundStyle(AppColors.textTertiary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    Button(L10n.get("welcome.browse")) {
-                        selectDirectory()
+                            .help(selectedDirectory?.path ?? "")
+                        Button(L10n.get("welcome.browse")) { selectDirectory() }
                     }
                 }
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(AppColors.controlBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(AppColors.controlBorder, lineWidth: 1)
-                )
             }
-            .frame(width: 350)
 
-            // 버튼
+            DisclosureGroup(isExpanded: $isShowingFolderOptions) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle(L10n.get("welcome.includeDefaultFolders"), isOn: $creationOptions.includesDefaultFolders)
+                        .toggleStyle(.checkbox)
+
+                    Text(L10n.get("welcome.defaultFoldersDescription"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                }
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+            } label: {
+                Text(L10n.get(isShowingFolderOptions ? "welcome.lessOptions" : "welcome.moreOptions"))
+            }
+            .animation(.easeInOut(duration: 0.2), value: isShowingFolderOptions)
+
+            Divider()
+
             HStack {
-                Button(L10n.common.cancel) {
-                    onCancel()
-                }
-                .keyboardShortcut(.escape)
-
-                Spacer()
-
-                Button(L10n.get("welcome.create")) {
-                    handleCreate()
-                }
-                .keyboardShortcut(.return)
-                .buttonStyle(.borderedProminent)
-                .disabled(!isValid)
+                Text(finalFolderName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 12)
+                Button(L10n.common.cancel) { onCancel() }
+                    .keyboardShortcut(.cancelAction)
+                Button(L10n.get("welcome.create")) { handleCreate() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!isValid)
             }
-            .frame(width: 350)
         }
-        .padding(30)
+        .padding(24)
+        .frame(width: 480)
+        .fixedSize(horizontal: false, vertical: true)
+        .presentationSizing(.fitted)
         .alert(
             L10n.get("welcome.customExtensionWarningTitle"),
             isPresented: $isShowingCustomExtensionAlert
         ) {
             Button(L10n.common.cancel, role: .cancel) {}
             Button(L10n.get("welcome.proceedAnyway"), role: .destructive) {
-                onCreate()
+                onCreate(creationOptions)
             }
         } message: {
             Text(L10n.get("welcome.customExtensionWarningMessage"))
@@ -380,7 +374,7 @@ struct NewProjectSheet: View {
         if hasCustomExtension {
             isShowingCustomExtensionAlert = true
         } else {
-            onCreate()
+            onCreate(creationOptions)
         }
     }
 

@@ -19,6 +19,9 @@ struct TextlinkEditorApp: App {
         defaults.set(true, forKey: "textlinkeditor.legacyPreferencesImported")
     }()
 
+    // Register file appearance relocation even while only the welcome/settings window is open.
+    private let appearanceStore = EditorAppearanceStore.shared
+
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var projectManager = ProjectManager.shared
     @State private var permissionManager = PermissionManager.shared

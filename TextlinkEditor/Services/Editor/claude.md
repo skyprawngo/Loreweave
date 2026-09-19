@@ -6,13 +6,13 @@
 
 원고 쓰기는 `FileSystem/DocumentFileStore.swift`의 신규 생성/기준본 비교 저장을 거친다. 닫기·전환·삭제는 먼저 에디터를 flush하고 저장/버리기/취소를 결정한다. 버리기 승인만으로 캐시를 지우지 않으며, 후속 파일 작업 실패 시 초안을 유지한다.
 
-앱의 Application Support/TextlinkEditor/Recovery에 프로젝트 경로별 복구 사본을 먼저 저장하고, `.{projectName}.weavedata/editor-session.json`에도 프로젝트 내부 탭을 저장한다. 탭·커서와 수정 중 `draftContent`·`baseContent`를 포함한다. 프로젝트 밖으로 다른 이름 저장한 탭의 `externalURL`은 앱 소유 복구 사본에서만 복원하며 프로젝트가 제공하는 절대 경로는 신뢰하지 않는다. 변경 후 0.5초 지연 저장이므로 갑작스러운 종료 직전 입력까지 보장하는 저널은 아니다. 복원 실패 시 원본 세션의 별도 사본 보존을 시도하고 오류를 알린다. 이것은 편집 초안 복구이며 전체 프로젝트의 장기 버전 백업은 아니다. 글꼴 등 프로젝트 설정은 같은 폴더의 `editor-settings.json`에 있다.
+앱의 Application Support/TextlinkEditor/Recovery에 프로젝트 경로별 복구 사본을 먼저 저장하고, `.{projectName}.weavedata/editor-session.json`에도 프로젝트 내부 탭을 저장한다. 탭·커서와 수정 중 `draftContent`·`baseContent`를 포함한다. 프로젝트 밖으로 다른 이름 저장한 탭의 `externalURL`은 앱 소유 복구 사본에서만 복원하며 프로젝트가 제공하는 절대 경로는 신뢰하지 않는다. 변경 후 0.5초 지연 저장이므로 갑작스러운 종료 직전 입력까지 보장하는 저널은 아니다. 복원 실패 시 원본 세션의 별도 사본 보존을 시도하고 오류를 알린다. 이것은 편집 초안 복구이며 전체 프로젝트의 장기 버전 백업은 아니다. 구형 프로젝트 공통 글꼴 설정은 `editor-settings.json`에 남아 있지만 현재 표시 설정은 아래의 전체 기본값/파일별 재정의 규칙을 사용한다.
 
 파일 이동·이름 변경은 탭 ID를 유지하면서 URL·편집 캐시·저장 상태를 함께 옮긴다. `EditorContainerView`와 `TextlinkEditorRepresentable`은 문서 ID·URL·내용 revision으로 지연된 binding 갱신의 귀속을 확인한다. IME 확정 결과를 이전 URL로 돌려주는 연결을 유지해야 한다.
 
 ## 외부 파일 동기화
 
-`EditorTabManager`가 열린 문서 전체의 감시 수명을 소유한다. 파일과 부모 디렉터리의 vnode 감시, `NSFilePresenter`, 앱 활성화·잠자기 복귀 및 5초 보완 검사를 함께 사용한다. 이벤트 후 백그라운드에서 완전한 본문을 읽고 탭 ID·요청 ID·기준본을 재검증한다. 원자적 파일 교체 후 감시는 다시 연결한다. `EditorContainerView`는 확인된 본문 갱신 알림만 화면에 적용한다.
+`EditorTabManager`가 열린 URL 집합을 전달하고 `FileSystem/Workspace/DocumentObservationController`가 감시·읽기 수명을 소유한다. 파일과 부모 디렉터리의 vnode 감시, `NSFilePresenter`, 앱 활성화·잠자기 복귀 및 5초 보완 검사를 함께 사용한다. 이벤트 후 백그라운드에서 완전한 본문을 읽고 탭 ID·요청 ID·기준본을 재검증한다. 원자적 파일 교체 후 감시는 다시 연결한다. `EditorContainerView`는 확인된 본문 갱신 알림만 화면에 적용한다.
 
 깨끗한 문서는 외부본을 반영한다. 양쪽이 수정되면 기준본과 앱 초안을 그대로 유지하고 조용히 충돌 상태로 둔다. 삭제되면 사이드바에서는 사라지지만 열린 본문은 유지하고 탭 제목에는 취소선을 표시한다. 자동 저장은 충돌·삭제 파일을 쓰지 않는다. 명시적 저장에서만 다른 이름 저장을 제안하며, 복사 저장은 기존 경로를 덮어쓰지 않는 배타적 생성이다. 충돌·삭제 탭을 닫으면 질문 없이 버리되 실제 닫기가 완료된 뒤 복구 세션을 동기 저장한다. 종료의 승인된 버리기 항목도 복원 목록에서 제외한다. 읽기 실패는 삭제로 간주하지 않는다.
 
@@ -46,6 +46,12 @@
 
 새 사용자 도구는 `../Core/EditorToolRegistry.swift`의 `tool(...)`로 ID·이름·분류·영향·실행 처리를 함께 등록한다. 기본 키가 없어도 설정 단축키 목록에 자동 반영된다. 툴바/메뉴는 `.tool(id)`를 사용하며 네이티브 target이 `toolBridge.perform`으로 실행을 감싼다. 버튼에 별도 시작/종료 알림이나 강제 전체 레이아웃을 넣지 않는다. `onEvent`는 관찰용이며 재진입 도구 실행은 취소된다. `tests/editor_tool_regression.py`는 실제 TextKit 2와 10만 줄 fixture에서 이벤트 순서·속성 편집 횟수·Undo·IME·취소를 검증한다. 본문 수정 후 문자열 스냅샷 발행과 저장본 비교는 여전히 문서 크기에 영향을 받는다.
 
+## Markdown 표시 모드
+
+`display.markdownPreview`는 툴바와 설정 → 단축키에 등록된 표시 전환 도구이며 기본 키는 지정하지 않는다. `Markdown/MarkdownPreviewRenderer.swift`는 원문을 변경하지 않고 굵게·기울임·취소선·밑줄 등의 인라인 서식을 표시용 attributed string으로 변환한다. 블록 Markdown 전체를 렌더링하는 계약은 아니다.
+
+`MarkdownPreviewView`는 읽기 전용 TextKit 2 미리보기를 소유하고 원문 편집기는 숨긴 채 유지한다. 따라서 표시 전환은 원고 저장·선택·Undo를 변경하지 않는다. 원문으로 돌아올 때 기존 편집기에 포커스만 돌려주며 로딩 완료로 처리하지 않는다. 파싱은 백그라운드에서 수행하고 취소된 결과는 버린다. `tests/markdown_preview_regression.py`는 실제 서식 속성·이스케이프 보존·네이티브 미리보기를 검증한다.
+
 ## 버전과 프로젝트 바꾸기
 
 `../Versions/VersionHistoryStore.swift`는 저장 전 본문과 수동 스냅샷을 프로젝트 메타데이터에 보관한다(문서당 최근 30개). 버전 복원은 새 파일 생성으로 원본 덮어쓰기를 피한다. 탭 경로 이동은 버전 기록과 집필 자료 링크도 함께 이동시킨다.
@@ -54,8 +60,28 @@
 
 ## 인라인 AI 공간
 
-원고 우클릭 또는 ⌘⌥I는 `editorInlineAI` 알림으로 `InlineAIChatView`를 설치한다. `NativeManuscriptTextView`의 TextKit 2 delegate가 `ManuscriptLayoutFragment.bottomMargin`으로 선택 문단 아래에 공간을 예약한다. 패널을 열고 닫을 때 해당 fragment의 여백과 레이아웃을 함께 무효화한다. 빈 문서와 마지막 빈 줄의 extra line fragment도 처리한다. 원고 문자열·저장 형식에는 패널 마커를 넣지 않는다. 패널과 미전송 입력은 탭의 네이티브 뷰 수명에만 속하며 외부 본문 교체 시 제거한다. 전송 즉시 패널을 닫고, 지시와 실행 결과는 인라인 편집 기록에 남는다.
+원고 우클릭 또는 ⌘I는 `editorInlineAI` 알림으로 `InlineAIChatView`를 설치한다. `NativeManuscriptTextView`의 TextKit 2 delegate가 `ManuscriptLayoutFragment.bottomMargin`으로 선택 문단 아래에 공간을 예약한다. 패널을 열고 닫을 때 해당 fragment의 여백과 레이아웃을 함께 무효화한다. 빈 문서와 마지막 빈 줄의 extra line fragment도 처리한다. 원고 문자열·저장 형식에는 패널 마커를 넣지 않는다. 패널과 미전송 입력은 탭의 네이티브 뷰 수명에만 속하며 외부 본문 교체 시 제거한다. 전송 즉시 패널을 닫고, 지시와 실행 결과는 인라인 편집 기록에 남는다.
 
 ## 대용량 원고 로딩
 
 `DocumentFileStore.readInChunks`는 작업 스레드에서 64KB씩 읽고 완전한 UTF-8 본문만 전달한다. `PreparedManuscript`는 문단 경계의 청크마다 대체 글꼴을 미리 계산하고, 레이아웃 관리자가 없는 저장소를 화면에 한 번만 이전한다. 로딩 요청 ID와 문서 ID로 취소된 탭의 결과를 버리며 로딩 중에는 저장과 편집 캐시 갱신을 막는다. 전체 논리 문서는 네이티브 선택·Undo·저장을 위해 유지하며 디스크 페이지 편집기는 아니다. 준비된 저장소는 `NSTextContentStorage.textStorage`에 연결한다. 화면의 배치·캐시는 TextKit 2의 viewport controller가 담당하며 전체 문서 `ensureLayout`은 호출하지 않는다. `tests/chunked_loading_regression.py`는 취소·UTF-8 경계·백그라운드 준비·저장을 검증한다.
+
+
+## 파일 관리 아키텍처 연결
+
+`EditorTabManager`는 탭/초안/선택의 상태 소유자이며 `WorkspaceDocumentParticipant`로 이동 전 flush와 삭제 전 결정을 제공한다. 생성 시 주입된 `WorkspaceFileCoordinator`의 성공 이벤트를 구독한다. 이름 변경/이동은 같은 탭 UUID와 초안을 유지하고 소유 URL을 이동한다. 파일 작업이 실패하면 성공 이벤트가 없으므로 탭 경로도 바뀌지 않는다.
+
+`DocumentObservationController`는 읽기 request UUID, 문서 UUID, 기준본을 고정하고 결과 전달 직전에 모두 확인한다. 저장으로 기준본이 바뀌었으면 다시 읽고, 새 요청/닫기/다른 문서로 바뀌었으면 폐기한다. 상태 판정은 `DocumentReconciliation`에 있고 UI 갱신은 관리자에 남는다. 최초 편집기 로딩도 관리자의 `readDocument`를 통해 동일 document repository를 사용하며, 뷰의 로딩 ID/문서 ID 검증을 추가로 유지한다.
+
+`Session/EditorDocumentModels.swift`는 탭·초안·저장 세션의 자료형, `Session/EditorSessionStore.swift`는 복구 경로·인코딩·원자적 기록·구형 세션 읽기·손상본 보존을 담당한다. 관리자는 immutable snapshot 생성, 직렬 recovery queue와 현재 세대의 오류 표시를 조율한다. 로컬 복구본의 외부 URL 신뢰 경계와 명시 저장의 flush 순서는 유지한다. 전체 프로젝트 백업이나 OS 비협조 writer 잠금으로 확장해 해석하지 않는다.
+
+
+## 전체 표시 기본값과 파일별 재정의
+
+`UserSettings`의 글꼴·글자 크기·표시 줄간격 비율·자간은 전체 기본값이다. 설정 → 에디터에서 변경하면 `editorAppearanceDefaultsChanged`를 발행한다. `Appearance/EditorAppearanceStore.swift`는 optional 필드로 구성한 파일별 재정의를 기본값 위에 합성한다. 예를 들어 글꼴만 재정의한 문서는 나머지 세 항목의 전체 설정 변경을 계속 따른다. 표시 서식은 원고 바이트나 수정 여부에 영향을 주지 않는다.
+
+`EditorAppearanceRepository`는 저장 계약, `JSONEditorAppearanceRepository`는 schema 1 JSON의 원자적 기록, `EditorAppearanceStore`는 파일 소유권·상속 계산·캐시·변경 이벤트를 담당한다. 앱 소유 `Application Support/TextlinkEditor/editor-appearance-overrides.json`에 정규화된 절대 경로별 재정의만 저장한다. 프로젝트 밖의 문서도 같은 규칙을 쓴다. 이 파일은 프로젝트의 이식 가능한 설정이 아니며 외부 Finder 이동/다른 기기로의 복사까지 추적하지 않는다. 앱 안 이동/폴더 이동은 기존 공통 파일 이벤트로 재정의를 옮기고 복사/다른 이름 저장은 원본을 남기면서 복사한다. 앱 시작 때 저장소가 이벤트 구독을 등록한다.
+
+편집기는 파일 전환·전체 기본값 이벤트에서 합성한 값을 읽기만 한다. 툴바 전용 Binding의 setter에서 실제로 변경한 속성만 저장하며, 비동기 폰트 패널 콜백은 Binding 생성 시점의 파일 URL을 캡처한다. 따라서 다른 탭으로 바꾼 뒤 도착한 콜백이 새 탭에 재정의를 만들지 않는다. 툴바 우클릭의 전체 기본값 복원은 해당 파일의 모든 재정의를 제거한다.
+
+구형 프로젝트 공통 설정에는 변경 대상 파일 정보가 없으므로 모든 파일의 개별 재정의로 복제하지 않는다. 기존 JSON은 삭제하지 않고 보존하며, 재정의가 없는 파일은 전체 설정을 따른다. 레코드는 최초 조회 때만 읽고 캐시하며 실제로 값이 달라진 경우에만 저장한다. 저장 실패 시 메모리 설정도 적용하지 않고 오류를 표시한다. 손상/미래 형식 파일은 빈 데이터로 덮어쓰지 않는다. `tests/editor_appearance_regression.py`는 항목별 상속, 파일 격리, 재로드, 이름/폴더 이동, 복사, 초기화, 손상/저장 실패를 검증한다.

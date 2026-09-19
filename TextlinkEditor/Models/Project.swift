@@ -7,6 +7,15 @@
 
 import Foundation
 
+/// Creation-only template choices. Existing projects keep their on-disk folders.
+struct ProjectCreationOptions {
+    var includesDefaultFolders = true
+
+    var orderedSections: [ProjectSection] {
+        includesDefaultFolders ? ProjectSection.allCases : []
+    }
+}
+
 struct Project: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String

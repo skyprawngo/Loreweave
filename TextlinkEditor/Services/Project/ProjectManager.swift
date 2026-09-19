@@ -152,8 +152,9 @@ final class ProjectManager {
     /// - Parameters:
     ///   - name: 프로젝트 이름 (커스텀 확장자 포함 가능)
     ///   - directoryURL: 저장할 디렉토리
+    ///   - options: 포함할 기본 폴더 (기본값은 전체 포함)
     /// - Returns: 생성된 프로젝트
-    func createProject(name: String, at directoryURL: URL) -> Project? {
+    func createProject(name: String, at directoryURL: URL, options: ProjectCreationOptions = .init()) -> Project? {
         do { try DocumentFileStore.validateName(name) }
         catch { presentError(error); return nil }
         // 이름에 .이 포함되어 있으면 커스텀 확장자로 간주
@@ -181,8 +182,8 @@ final class ProjectManager {
             // 숨김 데이터 폴더 생성 (.abc.weavedata)
             try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
 
-            // 6개 섹션 폴더 생성 (현재 언어에 맞는 이름으로)
-            for section in ProjectSection.allCases {
+            // 선택한 기본 폴더만 생성 (현재 언어에 맞는 이름으로)
+            for section in options.orderedSections {
                 let sectionFolderURL = projectFolderURL.appendingPathComponent(section.localizedFolderName)
                 try FileManager.default.createDirectory(at: sectionFolderURL, withIntermediateDirectories: true)
             }

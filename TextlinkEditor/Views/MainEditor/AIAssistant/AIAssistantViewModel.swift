@@ -25,12 +25,66 @@ final class AIAssistantViewModel {
     private var historyLoadFailed = false
     private var projectFolderURL: URL?
     private var cardSessionIds: [UUID: String] = [:]
-    private let processManager = CLIProcessManager()
+    private let processManager: any AIRequestExecuting
+    private let history: any AIHistoryRepository
     private var requestTask: Task<Void, Never>?
     private var setupTask: Task<Void, Never>?
     private var requestId: UUID?
 
-    init() { loadSavedState() }
+    var availableModels: [AIModelOption] {
+        get { modelPreferences.availableModels }
+        set { modelPreferences.availableModels = newValue }
+    }
+    var modelsLoading = false
+    var modelsError = false
+    private var modelCatalogOwner = UUID()
+    let modelPreferences: AIModelPreferences
+    var modelSelections: [String: String] {
+        get { modelPreferences.modelSelections }
+        set { modelPreferences.modelSelections = newValue }
+    }
+    func models(for type: AICLIType) -> [AIModelOption] { modelPreferences.models(for: type) }
+    func selectedModel(for type: AICLIType, category: AIConversationCategory = .chat) -> AIModelOption? {
+        modelPreferences.selectedModel(for: type, category: category)
+    }
+    func selectModel(_ id: String, for type: AICLIType, category: AIConversationCategory = .chat) {
+        modelPreferences.selectModel(id, for: type, category: category)
+    }
+    func selectEffort(_ effort: String, for type: AICLIType, category: AIConversationCategory = .chat) {
+        modelPreferences.selectEffort(effort, for: type, category: category)
+    }
+    func requestOptions(for type: AICLIType, category: AIConversationCategory = .chat) -> AIRequestOptions {
+        modelPreferences.requestOptions(for: type, category: category)
+    }
+    func refreshModels() async {
+        let owner = UUID()
+        modelCatalogOwner = owner
+        modelsLoading = true
+        modelsError = false
+        defer { if modelCatalogOwner == owner { modelsLoading = false } }
+        do {
+            let models = try await chatGPTAccount.availableModels()
+            guard modelCatalogOwner == owner else { return }
+            availableModels = models
+            for category in AIConversationCategory.allCases {
+                if let model = selectedModel(for: .chatgpt, category: category) {
+                    selectModel(model.id, for: .chatgpt, category: category)
+                }
+            }
+            modelsError = models.isEmpty
+        } catch {
+            guard modelCatalogOwner == owner else { return }
+            modelsError = true
+        }
+    }
+
+    init(modelDefaults: UserDefaults = .standard, history: any AIHistoryRepository = JSONAIHistoryRepository(),
+         executor: (any AIRequestExecuting)? = nil) {
+        modelPreferences = AIModelPreferences(modelDefaults: modelDefaults)
+        self.history = history
+        self.processManager = executor ?? CLIProcessManager()
+        loadSavedState()
+    }
 
     func loadSavedState() {
         guard UserSettings.shared.aiAssistantEnabled else {
@@ -62,16 +116,16 @@ final class AIAssistantViewModel {
     }
 
     private func loadHistory(_ type: AICLIType, url: URL) {
-        let history = ChatHistoryManager.shared
-        let session = history.loadSession(from: url)
-        historyLoadFailed = history.lastLoadFailed
-        if historyLoadFailed { errorMessage = L10n.get("ai.error.historyLoadFailed") }
-        messages = session?.messages ?? []
-        taggedCardIds = history.loadTaggedCardIds(from: url)
-        // A provider may only resume its own sessions. Cross-provider continuations use app history.
-        if session?.cliType == type.rawValue {
-            cardSessionIds = history.loadCardSessionIds(from: url)
-        } else { cardSessionIds = [:] }
+        do {
+            let snapshot = try history.load(from: url)
+            historyLoadFailed = false
+            messages = snapshot?.session.messages ?? []
+            taggedCardIds = snapshot?.metadata.taggedCardIds ?? []
+            cardSessionIds = snapshot?.metadata.cliType == type.rawValue ? snapshot?.sessionIds ?? [:] : [:]
+        } catch {
+            historyLoadFailed = true
+            errorMessage = L10n.get("ai.error.historyLoadFailed")
+        }
     }
 
     func prepareDraftAction(_ instruction: String) {
@@ -176,73 +230,26 @@ final class AIAssistantViewModel {
         let assistantId = UUID()
         var requestPersisted = false
         defer { if !requestPersisted { removeRequestArtifacts(ids: [assistantId]) } }
+        let category: AIConversationCategory = inlineRevision == nil ? .chat : .inlineEdit
+        if let savedModel = modelSelections[modelPreferences.preferenceKey(type, category)], !savedModel.isEmpty,
+           selectedModel(for: type, category: category) == nil {
+            reportPreparationError(L10n.get("ai.model.retry"))
+            return
+        }
+        let options = requestOptions(for: type, category: category)
         let originalInput = requestInput
         // Subscription accounts use the app-visible history, including after migration or account changes.
         let existingSession = type == .chatgpt ? nil : cardSessionIds[conversationId]
-        var context: [(question: String, answer: String)] = []
-        var question: AIMessage?
-        for message in messages {
-            if message.role == .user { question = message }
-            else if message.role == .assistant, message.outcome == nil || message.outcome == "completed", let question {
-                let root = question.conversationId ?? question.id
-                if taggedCardIds.contains(root) || (existingSession == nil && root == continueFromCardId) {
-                    context.append((question.content, message.content))
-                }
-            }
-        }
-        let allowsWorkspaceEdits = inlineRevision == nil && type == .chatgpt
-        var workspaceBefore: [String: String]?
-        if allowsWorkspaceEdits {
-            do { workspaceBefore = try AIWorkspaceEdits.prepare(id: assistantId, project: projectURL) }
-            catch { reportPreparationError(error.localizedDescription); return }
-        }
-        var prompt = AIPromptTemplateManager.shared.buildPromptWithContext(userInput: requestInput, taggedCards: context, cliType: type)
-        var revision = inlineRevision ?? (attachDocument ? ManuscriptRevisionBridge.capture(id: assistantId, project: projectURL) : nil)
-        revision?.id = assistantId
-        if let inlineRevision {
-            guard let current = ManuscriptRevisionBridge.capture(id: assistantId, project: projectURL),
-                  current.relativePath == inlineRevision.relativePath, current.original == inlineRevision.original,
-                  (try? ManuscriptRevisionBridge.documentURL(inlineRevision, project: projectURL)) != nil else {
-                reportPreparationError(L10n.get("revision.unavailable")); return
-            }
-            let payload = InlineEditRequest(instruction: requestInput, original: inlineRevision.target)
-            do { prompt = try payload.prompt() }
-            catch { reportPreparationError(error.localizedDescription); return }
-        }
-        if attachDocument {
-            guard let revision else {
-                reportPreparationError(L10n.get("ai.error.contextUnavailable"))
-                return
-            }
-            prompt = AIPromptTemplateManager.render(L10n.get("ai.chat.documentPrompt"),
-                values: ["name": revision.relativePath, "document": revision.original, "question": prompt], doubleBraces: false)
-        }
-        if allowsWorkspaceEdits {
-            let selectedPath = EditorTabManager.shared.selectedTab?.url.path ?? "(none)"
-            prompt += "\n\nTextlinkEditor workspace editing: You may edit manuscript .md/.txt/.markdown files inside the current project when the user requests it. Read the actual file before editing and preserve unrelated content. Do not modify hidden app metadata, authentication, or project settings. Verify the saved result and describe the actual changes, not a proposed rewrite. Current editor file (data): " + selectedPath
-        }
+        let prepared: PreparedAIRequest
         do {
-            EditorTabManager.shared.flushEditor()
-            var manifest = try inlineRevision == nil ? AIContextSelection.shared.manifest(projectURL: projectURL) : AIContextManifest(entries: [], text: "")
-            if inlineRevision != nil { manifest.entries = []; manifest.text = "" }
-            if !manifest.text.isEmpty { prompt += "\n\n" + manifest.text }
-            guard prompt.utf8.count <= 1_000_000 else { reportPreparationError(L10n.get("ai.error.contextTooLarge")); return }
-            if let revision { manifest.entries.append(.init(source: revision.relativePath, reason: L10n.get("ai.chat.attachCurrentDocument"), characters: inlineRevision == nil ? revision.original.count : revision.target.count, kind: .manuscript)) }
-            if inlineRevision == nil && !context.isEmpty {
-                manifest.entries.append(.init(source: L10n.get("ai.workspace.references"), reason: "Conversation context",
-                    characters: context.reduce(0) { $0 + $1.question.count + $1.answer.count }, kind: .conversation))
-            }
-            manifest.entries.append(.init(source: L10n.get("ai.chat.user"), reason: "User request", characters: originalInput.count, kind: .request))
-            manifest.text = prompt // Exact submitted prompt, including document, references and user request.
-            try AIContextSelection.shared.persist(manifest, requestID: assistantId, projectURL: projectURL)
+            prepared = try AIRequestPreparer().prepare(requestInput: requestInput, type: type,
+                projectURL: projectURL, assistantId: assistantId, inlineRevision: inlineRevision,
+                attachDocument: attachDocument, messages: messages, taggedCardIds: taggedCardIds,
+                existingSession: existingSession, continueFromCardId: continueFromCardId)
         } catch { reportPreparationError(error.localizedDescription); return }
-        if let revision {
-            do { try ManuscriptRevisionBridge.save(revision, project: projectURL) }
-            catch { reportPreparationError(error.localizedDescription); return }
-        }
-        guard prompt.utf8.count <= 1_000_000 else { reportPreparationError(L10n.get("ai.error.contextTooLarge")); return }
-        messages.append(AIMessage(id: userId, role: .user, content: originalInput, conversationId: conversationId, kind: inlineRevision == nil ? nil : "inlineEdit"))
-        messages.append(AIMessage(id: assistantId, role: .assistant, content: "", isStreaming: true, conversationId: conversationId, kind: inlineRevision == nil ? nil : "inlineEdit"))
+        let workspaceBefore = prepared.workspaceBefore
+        messages.append(AIMessage(id: userId, role: .user, content: originalInput, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort))
+        messages.append(AIMessage(id: assistantId, role: .assistant, content: "", isStreaming: true, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort))
         guard persist() else { messages.removeLast(2); return }
         requestPersisted = true
         if inlineInput == nil {
@@ -253,23 +260,20 @@ final class AIAssistantViewModel {
         requestId = id
         requestTask = Task { [weak self] in
             guard let self else { return }
-            // Reconcile partial writes on failure/cancellation too, always into the captured project.
-            defer {
-                if let workspaceBefore,
-                   (try? AIContextSelection.shared.savedRequestIDs(projectURL: projectURL).contains(assistantId)) == true {
-                    do { try AIWorkspaceEdits.finish(id: assistantId, before: workspaceBefore, project: projectURL) }
-                    catch { if projectFolderURL == projectURL { errorMessage = error.localizedDescription } }
+            let executor = AIWorkspaceTrackingExecutor(base: processManager, requestID: assistantId,
+                project: projectURL, before: workspaceBefore) { [weak self] error in
+                    guard let self, self.projectFolderURL == projectURL else { return }
+                    self.errorMessage = error.localizedDescription
                 }
-            }
             var receivedResponse: String?
             do {
-                let result = try await processManager.sendPrompt(prompt, cliType: type, workingDirectory: projectURL,
-                                                                 sessionId: existingSession, allowsWorkspaceEdits: allowsWorkspaceEdits) { [weak self] chunk in
+                let result = try await executor.sendPrompt(prepared.prompt, cliType: type, workingDirectory: projectURL,
+                                                                 sessionId: existingSession, allowsWorkspaceEdits: prepared.allowsWorkspaceEdits, options: options) { [weak self] chunk in
                     guard let self, requestId == id, projectFolderURL == projectURL,
                           let index = messages.firstIndex(where: { $0.id == assistantId }) else { return }
                     let old = messages[index]
                     messages[index] = AIMessage(id: old.id, role: .assistant, content: old.content + chunk,
-                                               timestamp: old.timestamp, isStreaming: true, conversationId: conversationId, kind: old.kind)
+                                               timestamp: old.timestamp, isStreaming: true, conversationId: conversationId, kind: old.kind, provider: old.provider, model: old.model, reasoningEffort: old.reasoningEffort)
                 }
                 guard requestId == id, projectFolderURL == projectURL, !Task.isCancelled else { return }
                 if let session = result.sessionId { cardSessionIds[conversationId] = session }
@@ -278,9 +282,9 @@ final class AIAssistantViewModel {
                     let replacement = try InlineEditRequest.replacement(from: result.response)
                     try ManuscriptRevisionBridge.apply(inlineRevision, proposal: replacement,
                         selected: Set(inlineRevision.changes(proposal: replacement).map(\.id)), project: projectURL)
-                    finish(assistantId, content: L10n.get("ai.inline.applied") + "\n\n" + replacement, outcome: "completed")
+                    finish(assistantId, content: L10n.get("ai.inline.applied") + "\n\n" + replacement, outcome: "completed", usage: result.usage)
                 } else {
-                    finish(assistantId, content: result.response, outcome: "completed")
+                    finish(assistantId, content: result.response, outcome: "completed", usage: result.usage)
                 }
             } catch {
                 guard requestId == id, projectFolderURL == projectURL else { return }
@@ -297,11 +301,11 @@ final class AIAssistantViewModel {
         }
     }
 
-    private func finish(_ messageId: UUID, content: String, outcome: String) {
+    private func finish(_ messageId: UUID, content: String, outcome: String, usage: AIContextUsage? = nil) {
         guard let index = messages.firstIndex(where: { $0.id == messageId }) else { return }
         let old = messages[index]
         messages[index] = AIMessage(id: old.id, role: .assistant, content: content, timestamp: old.timestamp,
-                                   conversationId: old.conversationId, outcome: outcome, kind: old.kind)
+                                   conversationId: old.conversationId, outcome: outcome, kind: old.kind, usage: usage, provider: old.provider, model: old.model, reasoningEffort: old.reasoningEffort)
         requestId = nil
         requestTask = nil
         isProcessing = false
@@ -318,7 +322,7 @@ final class AIAssistantViewModel {
             if let root = old.conversationId { cardSessionIds.removeValue(forKey: root) }
             let content = old.content.isEmpty ? L10n.get("ai.chat.cancelled") : old.content + "\n\n" + L10n.get("ai.chat.cancelled")
             messages[index] = AIMessage(id: old.id, role: .assistant, content: content,
-                                       timestamp: old.timestamp, conversationId: old.conversationId, outcome: "cancelled", kind: old.kind)
+                                       timestamp: old.timestamp, conversationId: old.conversationId, outcome: "cancelled", kind: old.kind, provider: old.provider, model: old.model, reasoningEffort: old.reasoningEffort)
             _ = persist()
         }
         isProcessing = false
@@ -327,7 +331,7 @@ final class AIAssistantViewModel {
     private func persist() -> Bool {
         guard !historyLoadFailed, let url = projectFolderURL, case .connected(let type) = connectionState else { return false }
         do {
-            try ChatHistoryManager.shared.saveState(messages: messages, taggedIds: taggedCardIds,
+            try history.save(messages: messages, taggedIds: taggedCardIds,
                                                     sessionIds: cardSessionIds, cliType: type.rawValue, to: url)
             return true
         } catch { errorMessage = L10n.get("ai.error.historySaveFailed"); return false }

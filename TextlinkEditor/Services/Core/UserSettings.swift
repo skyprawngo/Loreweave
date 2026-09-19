@@ -142,6 +142,7 @@ final class UserSettings {
         static let editorFontSize = "editorFontSize"
         static let editorLineSpacing = "editorLineSpacing"
         static let editorFontName = "editorFontName"
+        static let editorLetterSpacing = "editorLetterSpacing"
         static let showLineNumbers = "showLineNumbers"
         static let defaultProjectLocation = "defaultProjectLocation"
         static let lastOpenedProject = "lastOpenedProject"
@@ -241,19 +242,27 @@ final class UserSettings {
     /// 에디터 폰트 크기
     var editorFontSize: CGFloat {
         get { CGFloat(defaults.object(forKey: Keys.editorFontSize) as? Double ?? 14.0) }
-        set { defaults.set(Double(newValue), forKey: Keys.editorFontSize) }
+        set { defaults.set(Double(newValue), forKey: Keys.editorFontSize); NotificationCenter.default.post(name: .init("editorAppearanceDefaultsChanged"), object: nil) }
     }
 
-    /// 에디터 줄간격 (lineHeightMultiple 값)
+    /// 에디터 표시 줄간격 비율 (100% = 1.0, 실제 배치는 LineSpacingOption에서 변환)
     var editorLineSpacing: CGFloat {
         get { CGFloat(defaults.object(forKey: Keys.editorLineSpacing) as? Double ?? 1.0) }
-        set { defaults.set(Double(newValue), forKey: Keys.editorLineSpacing) }
+        set { defaults.set(Double(newValue), forKey: Keys.editorLineSpacing); NotificationCenter.default.post(name: .init("editorAppearanceDefaultsChanged"), object: nil) }
+    }
+
+    var editorLetterSpacing: CGFloat {
+        get { CGFloat(defaults.object(forKey: Keys.editorLetterSpacing) as? Double ?? 0) }
+        set {
+            defaults.set(Double(newValue), forKey: Keys.editorLetterSpacing)
+            NotificationCenter.default.post(name: .init("editorAppearanceDefaultsChanged"), object: nil)
+        }
     }
 
     /// 에디터 폰트 이름
     var editorFontName: String {
         get { defaults.string(forKey: Keys.editorFontName) ?? "SF Pro" }
-        set { defaults.set(newValue, forKey: Keys.editorFontName) }
+        set { defaults.set(newValue, forKey: Keys.editorFontName); NotificationCenter.default.post(name: .init("editorAppearanceDefaultsChanged"), object: nil) }
     }
 
     /// 줄 번호 표시
@@ -487,9 +496,13 @@ final class UserSettings {
             Keys.autoSaveOption,
             Keys.aiProvider,
             Keys.aiApiKey,
+            EditorToolbarAppearance.iconSizeKey,
+            EditorToolbarAppearance.numberSizeKey,
+            EditorToolbarAppearance.heightKey,
             Keys.editorFontSize,
             Keys.editorLineSpacing,
             Keys.editorFontName,
+            Keys.editorLetterSpacing,
             Keys.showLineNumbers,
             Keys.rememberCursorPosition,
             Keys.defaultProjectLocation,
@@ -507,5 +520,22 @@ final class UserSettings {
         for key in allKeys {
             defaults.removeObject(forKey: key)
         }
+        NotificationCenter.default.post(name: .init("editorAppearanceDefaultsChanged"), object: nil)
+    }
+}
+
+/// Shared defaults for the editor toolbar; separate from manuscript typography.
+enum EditorToolbarAppearance {
+    static let store = UserDefaults(suiteName: "com.loreweave.settings") ?? .standard
+    static let iconSizeKey = "editorToolbar.iconSize"
+    static let numberSizeKey = "editorToolbar.numberSize"
+    static let heightKey = "editorToolbar.height"
+    static let defaultIconSize = 11.0
+    static let defaultNumberSize = 11.0
+    static let defaultHeight = 32.0
+    static let sizeRange = 10.0...20.0
+    static let heightRange = 32.0...64.0
+    static func bounded(_ value: Double, in range: ClosedRange<Double>, fallback: Double) -> Double {
+        value.isFinite ? min(range.upperBound, max(range.lowerBound, value)) : fallback
     }
 }

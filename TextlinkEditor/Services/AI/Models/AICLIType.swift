@@ -109,3 +109,33 @@ enum AICLIType: String, CaseIterable, Identifiable {
         }
     }
 }
+
+struct AIModelOption: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let efforts: [String]
+    var isDefault = false
+    var defaultEffort: String? = nil
+    static func parse(_ value: [String: Any]) -> Self? {
+        guard let id = value["model"] as? String, !id.isEmpty, value["hidden"] as? Bool != true else { return nil }
+        return Self(id: id, name: value["displayName"] as? String ?? id,
+                    efforts: (value["supportedReasoningEfforts"] as? [[String: Any]] ?? []).compactMap { $0["reasoningEffort"] as? String }, isDefault: value["isDefault"] as? Bool ?? false, defaultEffort: value["defaultReasoningEffort"] as? String)
+    }
+}
+
+struct AIRequestOptions {
+    var model: String?
+    var effort: String?
+    func arguments(for type: AICLIType) -> [String] {
+        var result: [String] = []
+        if let model { result += ["--model", model] }
+        if let effort {
+            if type == .chatgpt {
+                // JSON string escaping is also valid for these TOML basic string values.
+                let value = String(decoding: try! JSONEncoder().encode(effort), as: UTF8.self)
+                result += ["-c", "model_reasoning_effort=" + value]
+            } else { result += ["--effort", effort] }
+        }
+        return result
+    }
+}

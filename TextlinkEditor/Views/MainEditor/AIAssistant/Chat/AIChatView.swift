@@ -408,6 +408,9 @@ struct AIChatView: View {
     let onTagChanged: (() -> Void)?
     let onSelectionResponse: ((Int) -> Void)?
     var onPreviewDocument: () -> AIDocumentSnapshot? = { nil }
+    @State private var modelSettings = AIAssistantViewModel.shared
+    @State private var showingUsage = false
+    @State private var showingModelControls = false
     @State private var composerHeight: CGFloat = 118
     @State private var inputHeight: CGFloat = 48
     @Binding var showingHistory: Bool
@@ -455,7 +458,7 @@ struct AIChatView: View {
     }
 
 
-    private var isInlineRecord: Bool { detailMessages.first?.kind == "inlineEdit" }
+    private var isInlineRecord: Bool { detailMessages.first?.category == .inlineEdit }
 
     private var contextCount: Int { (includeCurrentDocument && activeFile != nil ? 1 : 0) + taggedCardIds.count }
 
@@ -484,6 +487,9 @@ struct AIChatView: View {
             }
             .animation(.smooth(duration: 0.28), value: showingHistory)
             .clipped()
+        }
+        .task(id: cliType) {
+            if cliType == .chatgpt { await modelSettings.refreshModels() }
         }
         .sheet(isPresented: $showingPreview) { previewPage }
         .sheet(isPresented: $showingReferences) {
@@ -519,7 +525,7 @@ struct AIChatView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(message.content).textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                if message.role == .assistant, !message.isStreaming, message.kind != "inlineEdit",
+                                if message.role == .assistant, !message.isStreaming, message.category != .inlineEdit,
                                    let project = ProjectManager.shared.currentProject?.path,
                                    completedWorkspaceRequests.contains(message.id) || AIWorkspaceEdits.exists(id: message.id, project: project) {
                                     Button(L10n.get("revision.title")) {
@@ -573,12 +579,15 @@ struct AIChatView: View {
                 HStack {
                     Button { showingContext = true } label: {
                         Label(contextCount == 0 ? L10n.get("ai.workspace.context") : "\(L10n.get("ai.workspace.context")) · \(contextCount)", systemImage: "paperclip")
-                            .lineLimit(1)
+                            .labelStyle(.iconOnly)
                     }
                     .buttonStyle(.borderless)
+                    .help(L10n.get("ai.workspace.context"))
                     .disabled(isProcessing)
                     .popover(isPresented: $showingContext, arrowEdge: .top) { contextPopover }
-                    Spacer()
+                    modelControls
+                    Spacer(minLength: 2)
+                    contextUsageButton
                     if isProcessing {
                         iconButton("ai.workspace.stop", "stop.circle.fill", action: onCancel)
                     } else {
@@ -594,6 +603,114 @@ struct AIChatView: View {
         .background(AppColors.textEditorBackground, in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
         .padding(12)
+    }
+
+    private var modelControls: some View {
+        Button { showingModelControls.toggle() } label: {
+            HStack(spacing: 5) {
+                Text(modelSettings.selectedModel(for: cliType)?.name ?? L10n.get("ai.model.choose"))
+                    .lineLimit(1).truncationMode(.middle)
+                Text(currentEffortLabel).foregroundStyle(.secondary).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }.font(.caption)
+        }
+        .buttonStyle(.borderless)
+        .disabled(isProcessing)
+        .accessibilityLabel(L10n.get("ai.model.title") + " · " + L10n.get("ai.effort.title"))
+        .popover(isPresented: $showingModelControls, arrowEdge: .top) { modelPopover }
+    }
+
+    private var effortSteps: [String] {
+        modelSettings.selectedModel(for: cliType)?.efforts ?? []
+    }
+    private var effortIndex: Int {
+        effortSteps.firstIndex(of: modelSettings.requestOptions(for: cliType).effort ?? "") ?? 0
+    }
+    private var currentEffortLabel: String {
+        if let effort = modelSettings.requestOptions(for: cliType).effort { return effortLabel(effort) }
+        return L10n.get("ai.effort.unavailable")
+    }
+
+    private var modelPopover: some View {
+        VStack(spacing: 10) {
+            Menu {
+                ForEach(modelSettings.models(for: cliType)) { model in
+                    Button { modelSettings.selectModel(model.id, for: cliType) } label: {
+                        if modelSettings.selectedModel(for: cliType)?.id == model.id {
+                            Label(model.name, systemImage: "checkmark")
+                        } else { Text(model.name) }
+                    }
+                }
+                if cliType == .chatgpt {
+                    Divider()
+                    Button(L10n.get(modelSettings.modelsError ? "ai.model.retry" : "ai.model.refresh")) {
+                        Task { await modelSettings.refreshModels() }
+                    }
+                }
+            } label: {
+                Text(modelSettings.selectedModel(for: cliType)?.name ?? L10n.get("ai.model.choose"))
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel(L10n.get("ai.model.title"))
+            .disabled(modelSettings.modelsLoading)
+            Slider(value: Binding(get: { Double(effortIndex) }, set: { value in
+                guard !effortSteps.isEmpty else { return }
+                let index = min(effortSteps.count - 1, max(0, Int(value.rounded())))
+                modelSettings.selectEffort(effortSteps[index], for: cliType)
+            }), in: 0...Double(max(1, effortSteps.count - 1)), step: 1)
+            .disabled(effortSteps.count < 2)
+            .accessibilityLabel(L10n.get("ai.effort.title"))
+            .accessibilityValue(currentEffortLabel)
+            GeometryReader { geometry in
+                let labelWidth = (currentEffortLabel as NSString).size(withAttributes: [
+                    .font: NSFont.systemFont(ofSize: 11)
+                ]).width
+                let fraction = CGFloat(effortIndex) / CGFloat(max(1, effortSteps.count - 1))
+                // Keep the label centered beneath the selected stop, clamping at the edges.
+                let nodeX = 8 + fraction * max(0, geometry.size.width - 16)
+                Text(currentEffortLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.accentColor)
+                    .fixedSize()
+                    .position(x: min(max(labelWidth / 2, nodeX), geometry.size.width - labelWidth / 2),
+                              y: geometry.size.height / 2)
+            }
+            .frame(height: 16)
+        }
+        .padding(14)
+        .frame(width: 260)
+        .disabled(isProcessing)
+    }
+
+    private func effortLabel(_ effort: String) -> String {
+        let key = "ai.effort." + effort
+        let value = L10n.get(key)
+        return value == key ? effort.capitalized : value
+    }
+
+    private var contextUsageButton: some View {
+        Button { showingUsage = true } label: {
+            Image(systemName: "circle.dashed").foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help(L10n.get("ai.usage.title"))
+        .accessibilityLabel(L10n.get("ai.usage.title"))
+        .popover(isPresented: $showingUsage, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.get("ai.usage.title")).font(.headline)
+                if let usage = detailMessages.last(where: { $0.role == .assistant })?.usage {
+                    LabeledContent(L10n.get("ai.usage.input"), value: usage.inputTokens.formatted())
+                    LabeledContent(L10n.get("ai.usage.cached"), value: usage.cachedTokens.formatted())
+                    LabeledContent(L10n.get("ai.usage.output"), value: usage.outputTokens.formatted())
+                    LabeledContent(L10n.get("ai.usage.limit"), value: usage.contextWindow?.formatted() ?? L10n.get("ai.usage.unavailable"))
+                    Text(L10n.get("ai.usage.note")).font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(L10n.get("ai.usage.empty")).foregroundStyle(.secondary)
+                }
+            }.padding(16).frame(width: 290)
+        }
     }
 
     private var contextPopover: some View {
@@ -644,8 +761,8 @@ struct AIChatView: View {
             }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 8)
             List {
                 ForEach(conversationCards.reversed().filter {
-                    (historyQuery.isEmpty || $0.userMessage.content.localizedStandardContains(historyQuery)) &&
-                    (historyKind == 0 || ($0.userMessage.kind == "inlineEdit" ? historyKind == 2 : historyKind == 1))
+                    (historyQuery.isEmpty || $0.userMessage.content.localizedStandardContains(historyQuery) || $0.id.uuidString.localizedStandardContains(historyQuery) || ($0.userMessage.model?.localizedStandardContains(historyQuery) ?? false)) &&
+                    (historyKind == 0 || ($0.userMessage.category == .inlineEdit ? historyKind == 2 : historyKind == 1))
                 }) { card in
                     HStack {
                         Button {
@@ -653,13 +770,24 @@ struct AIChatView: View {
                             showingHistory = false
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                if card.userMessage.kind == "inlineEdit" {
-                                    Label(L10n.get("ai.inline.history"), systemImage: "pencil.line")
-                                        .font(.caption).foregroundStyle(.secondary)
+                                Label(card.userMessage.category.title,
+                                      systemImage: card.userMessage.category == .inlineEdit ? "pencil.line" : "bubble.left.and.bubble.right")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Text("ID · " + card.id.uuidString.prefix(8))
+                                    .font(.system(.caption2, design: .monospaced)).foregroundStyle(.tertiary)
+                                if let model = card.userMessage.model {
+                                    Text(model + (card.userMessage.reasoningEffort.map { " · " + effortLabel($0) } ?? ""))
+                                        .font(.caption2).foregroundStyle(.secondary)
                                 }
                                 Text(card.userMessage.content).lineLimit(2)
                             }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                         }.buttonStyle(.plain)
+                        .contextMenu {
+                            Button(L10n.get("ai.history.copyID")) {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(card.id.uuidString, forType: .string)
+                            }
+                        }
                         Button(role: .destructive) { pendingDeletion = card.id } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless).help(L10n.get("common.delete"))
                     }.padding(.vertical, 5)

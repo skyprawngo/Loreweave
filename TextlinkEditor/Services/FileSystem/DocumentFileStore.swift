@@ -11,9 +11,10 @@ enum DocumentFileStore {
               !name.contains("\0") else { throw Failure.invalidName }
     }
 
-    static func create(_ content: String, at url: URL) throws {
+    static func create(_ content: String, at url: URL, events: WorkspaceFileEvents? = .shared) throws {
         try validateName(url.lastPathComponent)
         try Data(content.utf8).write(to: url, options: .withoutOverwriting)
+        events?.publish(.init(url: url, change: .created))
     }
 
     /// Read on a worker in bounded I/O chunks. Decode only a complete UTF-8 snapshot:
@@ -64,7 +65,7 @@ enum DocumentFileStore {
         return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
     }
 
-    static func save(_ content: String, at url: URL, expected: String) throws {
+    static func save(_ content: String, at url: URL, expected: String, events: WorkspaceFileEvents? = .shared) throws {
         let coordinator = NSFileCoordinator()
         var coordinationError: NSError?
         var writeError: Error?
@@ -78,6 +79,7 @@ enum DocumentFileStore {
         }
         if let error = coordinationError { throw error }
         if let error = writeError { throw error }
+        events?.publish(.init(url: url, change: .saved))
     }
 
     /// Stream UTF-8 into a same-volume replacement, then publish only the complete file.
@@ -113,8 +115,8 @@ enum DocumentFileStore {
     }
 
     static func contains(_ url: URL, in directory: URL) -> Bool {
-        let base = directory.standardizedFileURL.path
-        let path = url.standardizedFileURL.path
+        let base = directory.standardizedFileURL.path.precomposedStringWithCanonicalMapping
+        let path = url.standardizedFileURL.path.precomposedStringWithCanonicalMapping
         return path == base || path.hasPrefix(base + "/")
     }
 

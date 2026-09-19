@@ -13,6 +13,8 @@ MyProject.weaveproj/
 
 프로젝트 생성 때 섹션 폴더 이름은 `folder.*` 번역으로 정해진다. 이후 언어 변경이 기존 폴더명을 바꾼다고 가정하지 않는다.
 
+`ProjectCreationOptions.includesDefaultFolders`는 생성 시 기본 폴더 전체를 추가할지 정하는 옵션이다. `NewProjectSheet`의 더보기 안에 있는 체크박스로 선택하며, 시작 화면과 편집 화면 모두 같은 옵션을 `createProject`에 전달한다. 기본값은 체크 상태다. 해제하면 기본 폴더 없이 생성하되 숨김 메타데이터는 항상 생성한다. 기존 프로젝트에 옵션을 저장하거나 기존 폴더를 삭제하지 않는다. 실제 디스크 결과는 `tests/project_creation_regression.py`에서 검증한다.
+
 숨김 데이터 폴더명은 프로젝트 파일명에서 계산되며 Editor와 AI 서비스에도 경로 계산이 있다. 이름 변경이나 저장 형식 수정은 이 참조들과 기존 데이터 호환성을 함께 살핀다.
 
 열기·닫기는 bookmark 접근, 최근/마지막 프로젝트와 연결된다. `openProjectFromFile`, `openProject`, `closeProject`와 메인 화면의 탭/AI 전환 호출을 함께 추적한다. `deleteProject`처럼 UI 이름과 다른 의미를 가질 수 있는 작업은 구현에서 실제 파일 삭제 여부를 확인한다.

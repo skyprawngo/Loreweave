@@ -26,10 +26,12 @@ struct EditorContainerView: View {
     @State private var characterCount = 0
     @State private var lineCount = 1
     @State private var presentedTool: String?
+    @State private var isMarkdownPreview = false
     @State private var fontSize: CGFloat = UserSettings.shared.editorFontSize
     @State private var fontName: String = UserSettings.shared.editorFontName
     @State private var lineSpacingOption: LineSpacingOption = .normal
-    @State private var letterSpacing: CGFloat = 0
+    @State private var letterSpacing: CGFloat = UserSettings.shared.editorLetterSpacing
+    @State private var appearanceError: String?
     @State private var cursorLine: Int = 1
     @State private var cursorColumn: Int = 0
     @State private var editCommand: EditorCommand?
@@ -47,7 +49,6 @@ struct EditorContainerView: View {
     @State private var currentFileURL: URL?
     @State private var previousFileURL: URL?  // 탭 전환 시 이전 파일 URL 추적
     @State private var isLoading: Bool = false
-    @State private var isLoadingSettings: Bool = false
     @State private var initialCursorPosition: (line: Int, column: Int)? = nil
     @State private var externallyModifiedLines: Set<Int> = []  // AI가 수정한 줄 번호들
 
@@ -92,13 +93,21 @@ struct EditorContainerView: View {
                 // 툴바
                 if !focusMode {
                 EditorToolbarView(
-                    fontSize: $fontSize,
-                    lineSpacingOption: $lineSpacingOption,
-                    letterSpacing: $letterSpacing,
-                    fontName: $fontName,
+                    fontSize: appearanceBinding(fontSize, change: EditorAppearanceChange.fontSize),
+                    lineSpacingOption: appearanceBinding(lineSpacingOption, change: { .lineSpacing($0.rawValue) }),
+                    letterSpacing: appearanceBinding(letterSpacing, change: EditorAppearanceChange.letterSpacing),
+                    fontName: appearanceBinding(fontName, change: EditorAppearanceChange.fontName),
+                    isMarkdownPreview: isMarkdownPreview,
                     onToolAction: { editCommand = EditorCommand(.tool($0)) },
                     presentedTool: $presentedTool
                 )
+                .contextMenu {
+                    Button(L10n.get("editor.appearance.reset")) {
+                        guard let url = tabManager.selectedTab?.url else { return }
+                        do { try EditorAppearanceStore.shared.reset(for: url) }
+                        catch { appearanceError = error.localizedDescription }
+                    }
+                }
 
                 }
 
@@ -142,9 +151,9 @@ struct EditorContainerView: View {
                     externallyModifiedLines: $externallyModifiedLines,
                     fontSize: fontSize,
                     fontName: fontName,
-                    lineHeightMultiple: lineSpacingOption.rawValue,
+                    lineHeightMultiple: lineSpacingOption.lineHeightMultiple,
                     letterSpacing: letterSpacing,
-                    isEditable: loadError == nil && !isLoading,
+                    isEditable: loadError == nil && !isLoading && !isMarkdownPreview,
                     initialCursorPosition: initialCursorPosition,
                     onContentWillChange: { ownerURL, finalText, cursorLine, cursorColumn in
                         // 탭 전환 직전: 이전 파일의 최종 텍스트(조합 확정 후)와 커서 위치를 캐시에 저장
@@ -165,10 +174,27 @@ struct EditorContainerView: View {
                     },
                     openDocumentIDs: Set(tabManager.tabs.map(\.id)),
                     preparedContent: preparedContent,
-                    onToolPresentation: { control in focusMode = false; presentedTool = control }
+                    isSourceVisible: !isMarkdownPreview,
+                    onToolPresentation: { control in
+                        if control == "markdownPreview" {
+                            tabManager.flushEditor()
+                            if let url = currentFileURL, let cached = tabManager.getCachedContent(for: url) { text = cached }
+                            isMarkdownPreview.toggle()
+                        } else { focusMode = false; presentedTool = control }
+                    }
                 )
+                .opacity(isMarkdownPreview ? 0 : 1)
+                .allowsHitTesting(!isMarkdownPreview)
+                .accessibilityHidden(isMarkdownPreview)
                 .background(AppColors.textEditorBackground)
                 .clipped()
+                .overlay {
+                    if isMarkdownPreview {
+                        MarkdownPreviewView(source: text, fontName: fontName, fontSize: fontSize,
+                            lineHeightMultiple: lineSpacingOption.lineHeightMultiple, letterSpacing: letterSpacing)
+                            .id(currentDocumentID)
+                    }
+                }
                 .overlay { if isLoading { ProgressView().controlSize(.regular).allowsHitTesting(false) } }
 
                 // 상태바
@@ -208,30 +234,26 @@ struct EditorContainerView: View {
             guard let id = notification.object as? String else { return }
             editCommand = EditorCommand(.tool(id))
         }
-        .onChange(of: fontSize) { _, newValue in
-            // 폰트 크기 변경 시 프로젝트 설정에 저장
-            guard !isLoadingSettings else { return }
-            saveEditorSettingsToProject()
+        .onReceive(NotificationCenter.default.publisher(for: EditorAppearanceStore.defaultsChanged)) { _ in
+            loadAppearance()
         }
-        .onChange(of: fontName) { _, newValue in
-            // 폰트 이름 변경 시 프로젝트 설정에 저장
-            guard !isLoadingSettings else { return }
-            saveEditorSettingsToProject()
+        .onReceive(NotificationCenter.default.publisher(for: EditorAppearanceStore.changed)) { _ in
+            if let error = EditorAppearanceStore.shared.error { appearanceError = error.localizedDescription }
+            loadAppearance()
         }
-        .onChange(of: lineSpacingOption) { _, newValue in
-            // 줄간격 변경 시 프로젝트 설정에 저장
-            guard !isLoadingSettings else { return }
-            saveEditorSettingsToProject()
-        }
+        .alert(L10n.get("editor.appearance.error"), isPresented: Binding(
+            get: { appearanceError != nil }, set: { if !$0 { appearanceError = nil } })) {
+            Button(L10n.common.confirm) { appearanceError = nil }
+        } message: { Text(appearanceError ?? "") }
         .onChange(of: projectManager.currentProject?.path) { oldPath, newPath in
             // 프로젝트가 변경되면 해당 프로젝트의 에디터 설정 로드
             if oldPath != newPath {
-                loadEditorSettingsFromProject()
+                loadAppearance()
             }
         }
         .onAppear {
             loadFileContent(from: tabManager.selectedTab?.url)
-            loadEditorSettingsFromProject()
+            loadAppearance()
             setupAutoSaveTimer()
             tabManager.refreshExternalDocuments()
         }
@@ -330,6 +352,7 @@ struct EditorContainerView: View {
     // MARK: - File Loading
 
     private func loadFileContent(from url: URL?) {
+        loadAppearance()
         guard url != currentFileURL || currentDocumentID != tabManager.selectedTab?.id || (isLoading && documentLoadTask == nil) else { return }
         documentLoadTask?.cancel()
         preparedContent = nil
@@ -354,10 +377,10 @@ struct EditorContainerView: View {
         let documentID = currentDocumentID
         documentLoadTask = Task { @MainActor in
             do {
-                let content = try await DocumentFileStore.readInChunks(at: url)
+                let content = try await tabManager.readDocument(at: url)
                 let prepared = content.utf8.count > 250_000
                     ? try await PreparedManuscript.prepare(text: content, fontName: fontName, fontSize: fontSize,
-                        lineHeightMultiple: lineSpacingOption.rawValue, letterSpacing: letterSpacing, color: AppColors.nsEditorText)
+                        lineHeightMultiple: lineSpacingOption.lineHeightMultiple, letterSpacing: letterSpacing, color: AppColors.nsEditorText)
                     : nil
                 guard !Task.isCancelled, documentLoadID == request,
                       currentDocumentID == documentID, tabManager.selectedTab?.id == documentID,
@@ -432,40 +455,30 @@ struct EditorContainerView: View {
         }
     }
 
-    // MARK: - Project Editor Settings
+    // MARK: - Appearance projection
 
-    /// 프로젝트에서 에디터 설정 로드
-    private func loadEditorSettingsFromProject() {
-        guard let projectPath = projectManager.currentProject?.path else { return }
-
-        isLoadingSettings = true
-
-        if let settings = tabManager.loadEditorSettings(from: projectPath) {
-            fontName = settings.fontName
-            fontSize = settings.fontSize
-            // lineSpacing을 LineSpacingOption으로 변환
-            lineSpacingOption = LineSpacingOption(rawValue: settings.lineSpacing) ?? .normal
-        } else {
-            // 프로젝트에 설정이 없으면 UserSettings의 기본값 사용
-            fontName = UserSettings.shared.editorFontName
-            fontSize = UserSettings.shared.editorFontSize
-            lineSpacingOption = LineSpacingOption(rawValue: UserSettings.shared.editorLineSpacing) ?? .normal
-        }
-
-        isLoadingSettings = false
+    private func appearanceBinding<Value: Equatable>(_ value: Value, change: @escaping (Value) -> EditorAppearanceChange) -> Binding<Value> {
+        // Capture the document owner when creating a control; a delayed font-panel callback
+        // must not write its selection into a different tab.
+        let document = tabManager.selectedTab?.url
+        return Binding(get: { value }, set: { newValue in
+            guard let document, newValue != value else { return }
+            do { try EditorAppearanceStore.shared.update(change(newValue), for: document) }
+            catch { appearanceError = error.localizedDescription }
+        })
     }
 
-    /// 에디터 설정을 프로젝트에 저장
-    private func saveEditorSettingsToProject() {
-        guard let projectPath = projectManager.currentProject?.path else { return }
-
-        let settings = ProjectEditorSettings(
-            fontName: fontName,
-            fontSize: fontSize,
-            lineSpacing: lineSpacingOption.rawValue
-        )
-
-        tabManager.saveEditorSettings(settings, to: projectPath)
+    private func loadAppearance() {
+        let settings = UserSettings.shared
+        let defaults = EditorAppearance(fontName: settings.editorFontName, fontSize: settings.editorFontSize,
+            lineSpacing: settings.editorLineSpacing, letterSpacing: settings.editorLetterSpacing)
+        do {
+            let appearance = try EditorAppearanceStore.shared.effective(for: tabManager.selectedTab?.url, defaults: defaults)
+            fontName = appearance.fontName
+            fontSize = appearance.fontSize
+            lineSpacingOption = LineSpacingOption(rawValue: appearance.lineSpacing) ?? .normal
+            letterSpacing = appearance.letterSpacing
+        } catch { appearanceError = error.localizedDescription }
     }
 
     // MARK: - Auto Save

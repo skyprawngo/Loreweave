@@ -36,11 +36,13 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
 
     var openDocumentIDs: Set<UUID>? = nil
     var preparedContent: PreparedManuscript? = nil
+    var isSourceVisible = true
     var onToolPresentation: ((String) -> Void)? = nil
 
     func makeNSView(context: Context) -> NativeManuscriptHost {
         let coordinator = context.coordinator
         let native = NativeManuscriptTextView()
+        coordinator.sourceVisible = isSourceVisible
         native.load(text, prepared: preparedContent)
         configure(native)
         let host = NativeManuscriptHost(textView: native)
@@ -77,8 +79,10 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
     func updateNSView(_ host: NativeManuscriptHost, context: Context) {
         guard isDocumentActive?(documentID, documentURL, contentRevision) ?? true else { return }
         let coordinator = context.coordinator
+        let becameVisible = isSourceVisible && !coordinator.sourceVisible
+        coordinator.sourceVisible = isSourceVisible
         let changed = coordinator.documentID != documentID
-        let finishedLoading = !coordinator.parent.isEditable && isEditable
+        let finishedLoading = !coordinator.parent.isEditable && isEditable && coordinator.parent.isSourceVisible
         // Width/toolbar updates must not bridge and compare the entire NSTextStorage.
         // Retain the last binding value: unchanged Swift strings share their storage.
         let contentChanged = coordinator.contentRevision != contentRevision || coordinator.presentedText != text
@@ -125,6 +129,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             coordinator.isUpdating = true
         }
         if changed || finishedLoading { coordinator.focusAndPublish() }
+        else if becameVisible { host.window?.makeFirstResponder(host.textView) }
     }
 
     private func configure(_ view: NativeManuscriptTextView) {
@@ -203,10 +208,12 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
                 self.parent.selectedLineRange = selected
             }
         }
+        var sourceVisible = true
+
         func focusAndPublish() {
             let id = documentID, revision = contentRevision
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.documentID == id, self.contentRevision == revision,
+                guard let self, self.parent.isSourceVisible, self.documentID == id, self.contentRevision == revision,
                       self.parent.isDocumentActive?(id, self.documentURL, revision) ?? true,
                       let native = self.host?.textView else { return }
                 native.scrollRangeToVisible(native.selectedRange())

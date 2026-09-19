@@ -16,6 +16,7 @@ final class FileSystemItem: Identifiable, Hashable {
     let isDirectory: Bool
     var children: [FileSystemItem]?
     var isExpanded: Bool
+    var customFolderIcon: String?
 
     /// 부모 항목 (약한 참조로 순환 참조 방지)
     weak var parent: FileSystemItem?
@@ -55,6 +56,7 @@ final class FileSystemItem: Identifiable, Hashable {
     /// 아이콘 이름 (SF Symbols)
     var iconName: String {
         if isDirectory {
+            if let customFolderIcon { return customFolderIcon }
             // 섹션 폴더인 경우 전용 아이콘 사용 (캐시된 값 사용)
             if let section = sectionType {
                 return section.iconName

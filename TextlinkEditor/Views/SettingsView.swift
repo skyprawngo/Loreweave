@@ -343,8 +343,13 @@ struct AISettingsView: View {
 // MARK: - Editor Settings
 
 struct EditorSettingsView: View {
-    @State private var fontSize: Double = Double(UserSettings.shared.editorFontSize)
-    @State private var lineSpacing: Double = Double(UserSettings.shared.editorLineSpacing)
+    @AppStorage(EditorToolbarAppearance.iconSizeKey, store: EditorToolbarAppearance.store) private var toolbarIconSize = EditorToolbarAppearance.defaultIconSize
+    @AppStorage(EditorToolbarAppearance.numberSizeKey, store: EditorToolbarAppearance.store) private var toolbarNumberSize = EditorToolbarAppearance.defaultNumberSize
+    @AppStorage(EditorToolbarAppearance.heightKey, store: EditorToolbarAppearance.store) private var toolbarHeight = EditorToolbarAppearance.defaultHeight
+    @State private var fontSize: CGFloat = UserSettings.shared.editorFontSize
+    @State private var fontName = UserSettings.shared.editorFontName
+    @State private var letterSpacing: Double = Double(UserSettings.shared.editorLetterSpacing)
+    @State private var lineSpacing: LineSpacingOption = LineSpacingOption(rawValue: UserSettings.shared.editorLineSpacing) ?? .normal
     @State private var autoSaveOption: AutoSaveOption = UserSettings.shared.autoSaveOption
     @State private var rememberCursorPosition: Bool = UserSettings.shared.rememberCursorPosition
 
@@ -352,6 +357,29 @@ struct EditorSettingsView: View {
         Form {
             // 글꼴 설정
             Section {
+                Text(L10n.get("editor.appearance.defaultsHelp"))
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Text(L10n.get("settings.editor.fontName"))
+                    Spacer()
+                    FontPickerControl(fontName: $fontName, fontSize: $fontSize)
+                }
+                .onChange(of: fontName) { _, name in UserSettings.shared.editorFontName = name }
+
+                HStack {
+                    Text(L10n.get("editor.letterSpacing"))
+                    TextField("", value: $letterSpacing, format: .number.precision(.fractionLength(0...1)))
+                        .frame(width: 60)
+                        .accessibilityLabel(L10n.get("editor.letterSpacing"))
+                    Text("pt").foregroundStyle(.secondary)
+                }
+                .onChange(of: letterSpacing) { _, value in
+                    guard value.isFinite else { return }
+                    let clamped = min(20, max(-5, value))
+                    letterSpacing = clamped
+                    UserSettings.shared.editorLetterSpacing = CGFloat(clamped)
+                }
+
                 HStack {
                     Text(L10n.editor.fontSize)
                     Slider(value: $fontSize, in: 12...24, step: 1)
@@ -364,16 +392,13 @@ struct EditorSettingsView: View {
                     UserSettings.shared.editorFontSize = CGFloat(newValue)
                 }
 
-                HStack {
-                    Text(L10n.editor.lineSpacing)
-                    Slider(value: $lineSpacing, in: 1.0...2.0, step: 0.25)
-                        .frame(width: 150)
-                    Text("\(Int(lineSpacing * 100))%")
-                        .foregroundStyle(AppColors.textSecondary)
-                        .frame(width: 40, alignment: .trailing)
+                Picker(L10n.editor.lineSpacing, selection: $lineSpacing) {
+                    ForEach(LineSpacingOption.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
                 }
                 .onChange(of: lineSpacing) { _, newValue in
-                    UserSettings.shared.editorLineSpacing = CGFloat(newValue)
+                    UserSettings.shared.editorLineSpacing = newValue.rawValue
                 }
 
                 Picker(L10n.get("settings.autoSave"), selection: $autoSaveOption) {
@@ -390,8 +415,29 @@ struct EditorSettingsView: View {
                         UserSettings.shared.rememberCursorPosition = newValue
                     }
             }
+            Section(L10n.get("settings.editor.toolbar")) {
+                toolbarSizeRow("settings.editor.toolbarIconSize", value: $toolbarIconSize, range: EditorToolbarAppearance.sizeRange)
+                toolbarSizeRow("settings.editor.toolbarNumberSize", value: $toolbarNumberSize, range: EditorToolbarAppearance.sizeRange)
+                toolbarSizeRow("settings.editor.toolbarHeight", value: $toolbarHeight, range: EditorToolbarAppearance.heightRange)
+                Button(L10n.get("settings.editor.toolbarReset")) {
+                    toolbarIconSize = EditorToolbarAppearance.defaultIconSize
+                    toolbarNumberSize = EditorToolbarAppearance.defaultNumberSize
+                    toolbarHeight = EditorToolbarAppearance.defaultHeight
+                }
+            }
         }
         .formStyle(.grouped)
+    }
+    private func toolbarSizeRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        HStack {
+            Text(L10n.get(title))
+            Slider(value: value, in: range, step: 1).frame(width: 150)
+                .accessibilityLabel(L10n.get(title))
+            Text("\(value.wrappedValue.formatted(.number.precision(.fractionLength(0)))) pt")
+                .monospacedDigit()
+                .foregroundStyle(AppColors.textSecondary)
+                .frame(width: 50, alignment: .trailing)
+        }
     }
 }
 
@@ -555,6 +601,7 @@ struct ShortcutsSettingsView: View {
             if showCategoryColumn {
                 TableColumn(L10n.get("settings.shortcuts.category")) { binding in
                     Text(binding.action.category.displayName)
+                        .lineLimit(1)
                         .foregroundStyle(AppColors.textSecondary)
                         .font(.caption)
                         .background(ShortcutTableScrollBoundary())
@@ -632,8 +679,15 @@ private struct ShortcutTableScrollBoundary: NSViewRepresentable {
         }
 
         func configureScrollView() {
-            // Avoid rubber-band oscillation at the first and last shortcut rows.
-            enclosingScrollView?.verticalScrollElasticity = .none
+            guard let scroll = enclosingScrollView else { return }
+            if scroll.verticalScrollElasticity != .none { scroll.verticalScrollElasticity = .none }
+            // SwiftUI estimates offscreen rows at 24pt, then measures the shortcut
+            // badges/switches taller as they appear. A changing document height
+            // makes the scroll position unstable even far from either boundary.
+            if let table = scroll.documentView as? NSTableView {
+                if table.usesAutomaticRowHeights { table.usesAutomaticRowHeights = false }
+                if table.rowHeight != 32 { table.rowHeight = 32 }
+            }
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }

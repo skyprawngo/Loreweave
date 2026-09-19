@@ -33,6 +33,7 @@ struct FileSystemItemRow: View {
     @State private var isEditing: Bool = false
     @State private var editingName: String = ""
     @State private var isDropTargeted: Bool = false
+    @State private var isShowingFolderOptions = false
     @FocusState private var isTextFieldFocused: Bool
     @FocusState private var isRowFocused: Bool
 
@@ -136,6 +137,9 @@ struct FileSystemItemRow: View {
             }
         }
         .contextMenu { contextMenuContent }
+        .sheet(isPresented: $isShowingFolderOptions) {
+            FolderOptionsSheet(item: item)
+        }
         .focusable(!isEditing)
         .focusEffectDisabled()
         .focused($isRowFocused)
@@ -246,6 +250,10 @@ struct FileSystemItemRow: View {
 
             Button(action: { showNewFolderDialog() }) {
                 Label(L10n.get("explorer.newFolder"), systemImage: "folder.badge.plus")
+            }
+
+            Button { isShowingFolderOptions = true } label: {
+                Label(L10n.get("explorer.folderOptions"), systemImage: "slider.horizontal.3")
             }
 
             Divider()

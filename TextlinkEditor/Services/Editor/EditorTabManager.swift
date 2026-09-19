@@ -7,7 +7,6 @@
 
 import Foundation
 import AppKit
-import CryptoKit
 
 // MARK: - Notification Names
 
@@ -19,126 +18,9 @@ extension Notification.Name {
     static let editorWillPerformFileOperation = Notification.Name("editorWillPerformFileOperation")
 }
 
-// MARK: - Tab State (저장용)
-
-/// 탭 상태 저장을 위한 Codable 구조체
-struct TabState: Codable {
-    let relativePath: String  // 프로젝트 폴더 기준 상대 경로
-    let isModified: Bool
-    let cursorLine: Int       // 커서 행 위치
-    let cursorColumn: Int     // 커서 열 위치
-    var draftContent: String?
-    var baseContent: String?
-    var externalURL: URL?
-
-    init(relativePath: String, isModified: Bool = false, cursorLine: Int = 0, cursorColumn: Int = 0) {
-        self.relativePath = relativePath
-        self.isModified = isModified
-        self.cursorLine = cursorLine
-        self.cursorColumn = cursorColumn
-    }
-}
-
-/// 에디터 세션 상태 (탭 목록 + 선택된 탭)
-struct EditorSessionState: Codable {
-    let tabs: [TabState]
-    let selectedTabIndex: Int
-
-    init(tabs: [TabState], selectedTabIndex: Int) {
-        self.tabs = tabs
-        self.selectedTabIndex = selectedTabIndex
-    }
-}
-
-/// 프로젝트별 에디터 설정 (폰트, 크기, 줄간격)
-struct ProjectEditorSettings: Codable {
-    var fontName: String
-    var fontSize: CGFloat
-    var lineSpacing: CGFloat  // lineHeightMultiple 값
-
-    init(fontName: String = "SF Pro", fontSize: CGFloat = 14.0, lineSpacing: CGFloat = 1.0) {
-        self.fontName = fontName
-        self.fontSize = fontSize
-        self.lineSpacing = lineSpacing
-    }
-
-    /// UserSettings의 기본값에서 생성
-    static func fromUserSettings() -> ProjectEditorSettings {
-        ProjectEditorSettings(
-            fontName: UserSettings.shared.editorFontName,
-            fontSize: UserSettings.shared.editorFontSize,
-            lineSpacing: UserSettings.shared.editorLineSpacing
-        )
-    }
-}
-
-/// 에디터에서 열린 파일 탭
-struct EditorTab: Identifiable, Equatable {
-    let id: UUID
-    var fileItem: FileSystemItem
-    var isModified: Bool
-    /// 방금 저장됨 표시 (애니메이션용)
-    var justSaved: Bool = false
-    var diskState: DocumentDiskState = .current
-
-    var title: String {
-        fileItem.name
-    }
-
-    var url: URL {
-        fileItem.url
-    }
-
-    /// 파일이 디스크에 존재하는지 확인
-    var fileExists: Bool {
-        diskState != .missing
-    }
-
-    init(fileItem: FileSystemItem, isModified: Bool = false) {
-        self.id = UUID()
-        self.fileItem = fileItem
-        self.isModified = isModified
-    }
-
-    static func == (lhs: EditorTab, rhs: EditorTab) -> Bool {
-        lhs.id == rhs.id
-    }
-}
-
-/// 탭별 편집 상태를 통합 관리하는 구조체
-struct TabEditState {
-    /// 편집 중인 텍스트
-    var content: String
-    /// 디스크에 저장된 원본 내용 (수정 여부 판단 기준)
-    var originalContent: String
-    /// 커서 위치 (line, column)
-    var cursorPosition: (line: Int, column: Int)
-
-    /// 수정 여부 (content와 originalContent 비교)
-    var isModified: Bool {
-        content != originalContent
-    }
-
-    init(content: String = "", originalContent: String = "", cursorPosition: (line: Int, column: Int) = (0, 0)) {
-        self.content = content
-        self.originalContent = originalContent
-        self.cursorPosition = cursorPosition
-    }
-
-    /// 저장 완료 후 호출 - originalContent를 현재 content로 업데이트
-    mutating func markAsSaved() {
-        originalContent = content
-    }
-}
-
-enum DocumentDiskState: Equatable {
-    case current, conflict, missing, unreadable
-    var requiresCopy: Bool { self == .conflict || self == .missing }
-}
-
 /// 에디터 탭 관리자
 @Observable
-final class EditorTabManager {
+final class EditorTabManager: WorkspaceDocumentParticipant {
     static let shared = EditorTabManager()
 
     /// 현재 열린 탭들
@@ -172,12 +54,7 @@ final class EditorTabManager {
     var saveErrors: [URL: String] = [:]
     var lastSavedAt: [URL: Date] = [:]
     var recoveryError: String?
-    @ObservationIgnored private var diskMonitors: [URL: OpenDocumentMonitor] = [:]
-    @ObservationIgnored private var diskReads: [URL: Task<Void, Never>] = [:]
-    @ObservationIgnored private var diskReadIDs: [URL: UUID] = [:]
-    @ObservationIgnored private var diskTimer: Timer?
-    @ObservationIgnored private var activationObserver: NSObjectProtocol?
-    @ObservationIgnored private var wakeObserver: NSObjectProtocol?
+    @ObservationIgnored private let observation: DocumentObservationController
     private var approvedDiscards: Set<URL> = []
     private var navigation: [URL] = []
     private var navigationIndex = -1
@@ -196,19 +73,57 @@ final class EditorTabManager {
         return tabs[selectedTabIndex]
     }
 
+    private let files: WorkspaceFileCoordinator
+    @ObservationIgnored private var fileEventObserver: NSObjectProtocol?
     private let recoveryDirectory: URL
 
-    init(recoveryDirectory: URL? = nil) {
+    init(recoveryDirectory: URL? = nil, files: WorkspaceFileCoordinator = .shared) {
+        self.files = files
+        observation = DocumentObservationController(repository: files.documents, events: files.events)
     // Legacy storage identity retained for existing user data after the product rename.
         self.recoveryDirectory = recoveryDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Loreweave/Recovery", isDirectory: true)
+        observation.identity = { [weak self] url in
+            guard let self, let index = self.findTab(with: url) else { return nil }
+            return (self.tabs[index].id, self.editStates[url]?.originalContent)
+        }
+        observation.receive = { [weak self] url, result in
+            guard let self else { return }
+            switch result {
+            case .success(let disk):
+                if self.loadedDocuments.contains(url) { self.receiveDiskContent(disk, for: url) }
+                else { self.setDiskState(.current, for: url) }
+            case .failure(let error): self.receiveDiskFailure(error, for: url)
+            }
+        }
+        files.register(self)
+        fileEventObserver = files.events.observe { [weak self] event in self?.receiveFileEvent(event) }
+
     }
 
-    deinit { stopDiskMonitoring() }
+    deinit {
+        stopDiskMonitoring()
+        if let fileEventObserver { files.events.remove(fileEventObserver) }
+    }
 
-    private func localSessionURL(for project: URL) -> URL {
-        let digest = SHA256.hash(data: Data(project.standardizedFileURL.path.utf8)).map { String(format: "%02x", $0) }.joined()
-        return recoveryDirectory.appendingPathComponent(digest + ".json")
+    func prepareForFileMove() { flushEditor() }
+    func prepareForFileDeletion(at url: URL) -> Bool {
+        prepareToClose(tabs.filter { DocumentFileStore.contains($0.url, in: url) })
+    }
+    private func receiveFileEvent(_ event: WorkspaceFileEvent) {
+        switch event.change {
+        case .moved(let old):
+            if sessionProjectURL.map({ DocumentFileStore.contains(old, in: $0) }) == true ||
+                tabs.contains(where: { DocumentFileStore.contains($0.url, in: old) }) {
+                relocateTabs(from: old, to: event.url)
+            }
+        case .trashed: closeTabsUnder(folderURL: event.url)
+        case .saved, .created, .copied, .invalidated:
+            for tab in tabs where WorkspaceFileIdentity.same(tab.url, event.url) || DocumentFileStore.contains(tab.url, in: event.url) {
+                requestDiskRead(for: tab.url)
+            }
+        case .documentContentAccepted, .documentStateChanged, .documentCopied: break
+        }
     }
 
     // MARK: - Tab Operations
@@ -216,7 +131,7 @@ final class EditorTabManager {
     /// 파일을 새 탭으로 열기
     func openFile(_ fileItem: FileSystemItem) {
         // 이미 열려있는 탭인지 확인
-        if let existingIndex = tabs.firstIndex(where: { $0.fileItem.url == fileItem.url }) {
+        if let existingIndex = tabs.firstIndex(where: { WorkspaceFileIdentity.same($0.fileItem.url, fileItem.url) }) {
             selectedTabIndex = existingIndex
             notifyTabsChanged()
             return
@@ -298,16 +213,16 @@ final class EditorTabManager {
     func saveTab(at index: Int, content: String) -> Bool {
         guard tabs.indices.contains(index), let state = editStates[tabs[index].url] else { return false }
         let url = tabs[index].url
-        diskReads.removeValue(forKey: url)?.cancel()
-        diskReadIDs.removeValue(forKey: url)
+        observation.cancelRead(url)
         do {
             // Always verify at the write boundary, even before a watcher has delivered an event.
-            let disk = try String(contentsOf: url, encoding: .utf8)
-            if content == state.originalContent, disk != state.originalContent {
+            let disk = try files.documents.read(url)
+            let decision = DocumentReconciliation.decide(base: state.originalContent, draft: content, disk: disk)
+            if content == state.originalContent, decision == .adoptDisk {
                 receiveDiskContent(disk, for: url)
                 return true
             }
-            guard disk == state.originalContent || disk == content else {
+            guard decision != .conflict else {
                 setDiskState(.conflict, for: url)
                 throw DocumentFileStore.Failure.conflict
             }
@@ -315,7 +230,7 @@ final class EditorTabManager {
                url.standardizedFileURL.path.hasPrefix(project.standardizedFileURL.path + "/") {
                 _ = try VersionHistoryStore.snapshot(projectURL: project, documentURL: url, content: state.originalContent, reason: "versions.beforeSave")
             }
-            try DocumentFileStore.save(content, at: url, expected: state.originalContent)
+            try files.documents.save(content, at: url, expected: state.originalContent)
             editStates[url]?.content = content
             editStates[url]?.markAsSaved()
             setDiskState(.current, for: url)
@@ -338,8 +253,14 @@ final class EditorTabManager {
         }
     }
 
+    private func ownedURL(_ url: URL) -> URL {
+        if editStates[url] != nil { return url }
+        return tabs.first(where: { WorkspaceFileIdentity.same($0.url, url) })?.url ?? url
+    }
+
     /// URL로 탭의 수정 상태 확인
     func isModified(url: URL) -> Bool {
+        let url = ownedURL(url)
         return editStates[url]?.isModified ?? false
     }
 
@@ -347,11 +268,13 @@ final class EditorTabManager {
 
     /// URL의 전체 편집 상태 가져오기
     func getEditState(for url: URL) -> TabEditState? {
+        let url = ownedURL(url)
         return editStates[url]
     }
 
     /// URL의 편집 상태 설정 (없으면 생성)
     func setEditState(_ state: TabEditState, for url: URL) {
+        let url = ownedURL(url)
         editStates[url] = state
         loadedDocuments.insert(url)
         if let index = findTab(with: url) { tabs[index].isModified = state.isModified }
@@ -360,20 +283,22 @@ final class EditorTabManager {
 
     /// URL의 편집 상태 삭제
     func removeEditState(for url: URL) {
+        let url = ownedURL(url)
         editStates.removeValue(forKey: url)
         loadedDocuments.remove(url)
-        diskReads.removeValue(forKey: url)?.cancel()
-        diskReadIDs.removeValue(forKey: url)
-        diskMonitors.removeValue(forKey: url)?.stop()
+        observation.cancelRead(url)
+        observation.remove(url)
     }
 
     /// URL로 캐시된 탭 내용 가져오기
     func getCachedContent(for url: URL) -> String? {
+        let url = ownedURL(url)
         return editStates[url]?.content
     }
 
     /// 탭 내용을 캐시에 저장 (편집 상태가 없으면 생성)
     func setCachedContent(_ content: String, for url: URL) {
+        let url = ownedURL(url)
         guard findTab(with: url) != nil else { return }
         if editStates[url] != nil {
             editStates[url]?.content = content
@@ -392,6 +317,7 @@ final class EditorTabManager {
 
     /// 원본 콘텐츠 설정 (파일 로드 시 사용)
     func setOriginalContent(_ content: String, for url: URL) {
+        let url = ownedURL(url)
         loadedDocuments.insert(url)
         if editStates[url] != nil {
             editStates[url]?.originalContent = content
@@ -406,16 +332,19 @@ final class EditorTabManager {
 
     /// 캐시에서 탭 내용 삭제 (레거시 호환)
     func removeCachedContent(for url: URL) {
+        let url = ownedURL(url)
         removeEditState(for: url)
     }
 
     /// URL로 캐시된 커서 위치 가져오기
     func getCachedCursorPosition(for url: URL) -> (line: Int, column: Int)? {
+        let url = ownedURL(url)
         return editStates[url]?.cursorPosition
     }
 
     /// 커서 위치를 캐시에 저장
     func setCachedCursorPosition(line: Int, column: Int, for url: URL) {
+        let url = ownedURL(url)
         if editStates[url] != nil {
             editStates[url]?.cursorPosition = (line, column)
         } else {
@@ -450,7 +379,7 @@ final class EditorTabManager {
 
     /// URL로 탭 찾기
     func findTab(with url: URL) -> Int? {
-        tabs.firstIndex(where: { $0.fileItem.url == url })
+        tabs.firstIndex(where: { WorkspaceFileIdentity.same($0.fileItem.url, url) })
     }
 
     /// 탭이 비어있는지 확인
@@ -599,18 +528,19 @@ final class EditorTabManager {
         panel.directoryURL = tab.url.deletingLastPathComponent()
         guard panel.runModal() == .OK, let target = panel.url else { return }
         do {
-            if target == tab.url {
+            if WorkspaceFileIdentity.same(target, tab.url) {
                 if !saveTab(at: selectedTabIndex, content: content) {
                     if diskState(for: tab.url).requiresCopy { offerConflictCopy(for: tab) }
                     else { showSaveError(for: tab.url) }
                 }
                 return
             }
-            guard !tabs.contains(where: { $0.url == target }) else { throw NSError(domain: "AIWorkspaceEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.get("storage.conflict")]) }
+            guard !tabs.contains(where: { WorkspaceFileIdentity.same($0.url, target) }) else { throw NSError(domain: "AIWorkspaceEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.get("storage.conflict")]) }
             if FileManager.default.fileExists(atPath: target.path) {
-                let base = try String(contentsOf: target, encoding: .utf8)
-                try DocumentFileStore.save(content, at: target, expected: base)
-            } else { try DocumentFileStore.create(content, at: target) }
+                let base = try files.documents.read(target)
+                try files.documents.save(content, at: target, expected: base)
+            } else { try files.documents.create(content, at: target) }
+            files.events.publish(.init(url: target, change: .documentCopied(from: tab.url)))
             relocateTabs(from: tab.url, to: target)
             if let i = findTab(with: target) {
                 editStates[target]?.markAsSaved()
@@ -634,14 +564,10 @@ final class EditorTabManager {
         }
         for i in tabs.indices {
             let source = tabs[i].url
-            guard DocumentFileStore.contains(source, in: old) else { continue }
-            let suffix = String(source.path.dropFirst(old.path.count))
-            let target = URL(fileURLWithPath: new.path + suffix)
+            guard let target = WorkspaceFileIdentity.relocated(source, from: old, to: new) else { continue }
             let oldItem = tabs[i].fileItem
             tabs[i].fileItem = FileSystemItem(url: target, isDirectory: oldItem.isDirectory)
-            diskReads.removeValue(forKey: source)?.cancel()
-            diskReadIDs.removeValue(forKey: source)
-            diskMonitors.removeValue(forKey: source)?.stop()
+            observation.remove(source)
             tabs[i].diskState = .current
             if loadedDocuments.remove(source) != nil { loadedDocuments.insert(target) }
             editStates[target] = editStates.removeValue(forKey: source)
@@ -722,8 +648,7 @@ final class EditorTabManager {
 
         let sessionFile = sessionFileURL(for: projectURL)
 
-        let localFile = localSessionURL(for: projectURL)
-        let directory = recoveryDirectory
+        let store = EditorSessionStore(recoveryDirectory: recoveryDirectory)
         let portableTabs = tabStates.filter { $0.externalURL == nil }
         let selectedURL = selectedTab?.url
         let portableIndex = portableTabs.firstIndex { projectURL.appendingPathComponent($0.relativePath) == selectedURL } ?? 0
@@ -733,11 +658,7 @@ final class EditorTabManager {
         // Immutable snapshots cross the queue; AppKit and observable state stay on main.
         let write: () -> String? = {
             do {
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = .prettyPrinted
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try encoder.encode(sessionState).write(to: localFile, options: .atomic)
-                try encoder.encode(portable).write(to: sessionFile, options: .atomic)
+                try store.write(local: sessionState, portable: portable, project: projectURL, portableURL: sessionFile)
                 return nil
             } catch { return error.localizedDescription }
         }
@@ -771,22 +692,10 @@ final class EditorTabManager {
         loadedDocuments.removeAll()
         tabs.removeAll()
         selectedTabIndex = 0
-        let local = localSessionURL(for: projectURL)
-        let portable = sessionFileURL(for: projectURL)
-        var decoded: EditorSessionState?
-        var trustedLocal = false
-        for file in [local, portable] where FileManager.default.fileExists(atPath: file.path) {
-            do {
-                decoded = try JSONDecoder().decode(EditorSessionState.self, from: Data(contentsOf: file))
-                trustedLocal = file == local
-                break
-            } catch {
-                recoveryError = error.localizedDescription
-                let archive = file.deletingPathExtension().appendingPathExtension("unreadable-" + UUID().uuidString + ".json")
-                try? FileManager.default.copyItem(at: file, to: archive)
-            }
-        }
-        guard let session = decoded else { return }
+        let loaded = EditorSessionStore(recoveryDirectory: recoveryDirectory).load(project: projectURL, portableURL: sessionFileURL(for: projectURL))
+        recoveryError = loaded.error
+        let trustedLocal = loaded.trustedLocal
+        guard let session = loaded.session else { return }
         for entry in session.tabs {
             let url = (entry.externalURL ?? projectURL.appendingPathComponent(entry.relativePath)).standardizedFileURL
             guard ((trustedLocal && entry.externalURL != nil) || (entry.externalURL == nil && DocumentFileStore.contains(url, in: projectURL))),
@@ -841,7 +750,9 @@ final class EditorTabManager {
 
     // MARK: - External document synchronization
 
-    func hasLoadedContent(for url: URL) -> Bool { loadedDocuments.contains(url) }
+    func readDocument(at url: URL) async throws -> String { try await files.documents.readSnapshot(url) }
+
+    func hasLoadedContent(for url: URL) -> Bool { loadedDocuments.contains(ownedURL(url)) }
 
     func diskState(for url: URL) -> DocumentDiskState {
         findTab(with: url).map { tabs[$0].diskState } ?? .current
@@ -850,22 +761,24 @@ final class EditorTabManager {
     private func setDiskState(_ state: DocumentDiskState, for url: URL) {
         guard let index = findTab(with: url), tabs[index].diskState != state else { return }
         tabs[index].diskState = state
-        NotificationCenter.default.post(name: .editorDiskStateDidChange, object: url)
+        files.events.publish(.init(url: url, change: .documentStateChanged))
         autoSaveSessionIfNeeded()
     }
 
     /// Used by both the event reader and deterministic regression fixtures. Never advances
     /// the base underneath an unsaved draft. Flush only when an actual competing version exists.
     func receiveDiskContent(_ disk: String, for url: URL) {
+        let url = ownedURL(url)
         guard let old = editStates[url], findTab(with: url) != nil else { return }
         if disk != old.originalContent, selectedTab?.url == url { flushEditor() }
         guard var state = editStates[url], findTab(with: url) != nil else { return }
-        if disk == state.originalContent {
+        let decision = DocumentReconciliation.decide(base: state.originalContent, draft: state.content, disk: disk)
+        if decision == .unchanged {
             setDiskState(.current, for: url)
             saveErrors[url] = nil
             return
         }
-        if state.isModified && disk != state.content {
+        if decision == .conflict {
             setDiskState(.conflict, for: url)
             return
         }
@@ -877,7 +790,7 @@ final class EditorTabManager {
         setDiskState(.current, for: url)
         saveErrors[url] = nil
         if contentChanged {
-            NotificationCenter.default.post(name: .editorDiskContentDidChange, object: url)
+            files.events.publish(.init(url: url, change: .documentContentAccepted))
         }
         autoSaveSessionIfNeeded()
     }
@@ -892,91 +805,25 @@ final class EditorTabManager {
         if case DocumentFileStore.Failure.conflict = error {
             // A writer changed the file during the read. Keep the last valid state and retry.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                self?.requestDiskRead(for: url)
+                self?.files.events.publish(.init(url: url, change: .invalidated))
             }
         } else if isMissingFileError(error) { setDiskState(.missing, for: url) }
         else { setDiskState(.unreadable, for: url) }
     }
 
     private func refreshDiskStateBeforeClose(for url: URL) {
-        diskReads.removeValue(forKey: url)?.cancel()
-        diskReadIDs.removeValue(forKey: url)
-        do { receiveDiskContent(try String(contentsOf: url, encoding: .utf8), for: url) }
+        observation.cancelRead(url)
+        do { receiveDiskContent(try files.documents.read(url), for: url) }
         catch { receiveDiskFailure(error, for: url) }
     }
 
     func refreshExternalDocuments() {
         synchronizeDiskMonitors()
-        for url in diskMonitors.keys { requestDiskRead(for: url) }
+        observation.refresh()
     }
-
-    private func requestDiskRead(for url: URL) {
-        guard let index = findTab(with: url) else { return }
-        let base = editStates[url]?.originalContent
-        diskReads[url]?.cancel()
-        let documentID = tabs[index].id
-        let request = UUID()
-        diskReadIDs[url] = request
-        diskReads[url] = Task { @MainActor [weak self] in
-            let result: Result<String, Error>
-            do { result = .success(try await DocumentFileStore.readInChunks(at: url)) }
-            catch { result = .failure(error) }
-            guard let self, !Task.isCancelled, self.diskReadIDs[url] == request,
-                  let index = self.findTab(with: url), self.tabs[index].id == documentID else { return }
-            self.diskReads[url] = nil
-            self.diskReadIDs[url] = nil
-            // A save or other read may have advanced the base while I/O was suspended.
-            guard self.editStates[url]?.originalContent == base else {
-                self.requestDiskRead(for: url)
-                return
-            }
-            switch result {
-            case .success(let disk):
-                if self.loadedDocuments.contains(url) { self.receiveDiskContent(disk, for: url) }
-                else { self.setDiskState(.current, for: url) }
-            case .failure(let error): self.receiveDiskFailure(error, for: url)
-            }
-        }
-    }
-
-    private func synchronizeDiskMonitors() {
-        let urls = Set(tabs.map(\.url))
-        for url in Array(diskMonitors.keys) where !urls.contains(url) {
-            diskMonitors.removeValue(forKey: url)?.stop()
-            diskReads.removeValue(forKey: url)?.cancel()
-            diskReadIDs.removeValue(forKey: url)
-        }
-        for url in urls where diskMonitors[url] == nil {
-            diskMonitors[url] = OpenDocumentMonitor(url: url) { [weak self] in
-                self?.requestDiskRead(for: url)
-            }
-            requestDiskRead(for: url)
-        }
-        if urls.isEmpty { stopDiskMonitoring(); return }
-        if diskTimer == nil {
-            diskTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-                guard let self else { return }
-                for monitor in self.diskMonitors.values { monitor.reconnect() }
-                // Full content audit also catches preserved timestamps and same-size writes.
-                self.refreshExternalDocuments()
-            }
-            activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
-                object: nil, queue: .main) { [weak self] _ in self?.refreshExternalDocuments() }
-            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
-                object: nil, queue: .main) { [weak self] _ in self?.refreshExternalDocuments() }
-        }
-    }
-
-    private func stopDiskMonitoring() {
-        diskTimer?.invalidate(); diskTimer = nil
-        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
-        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
-        activationObserver = nil; wakeObserver = nil
-        for monitor in diskMonitors.values { monitor.stop() }
-        diskMonitors.removeAll()
-        for task in diskReads.values { task.cancel() }
-        diskReads.removeAll(); diskReadIDs.removeAll()
-    }
+    private func requestDiskRead(for url: URL) { observation.requestRead(url) }
+    private func synchronizeDiskMonitors() { observation.synchronize(Set(tabs.map(\.url))) }
+    private func stopDiskMonitoring() { observation.stop() }
 
     private func persistClosedTabs() {
         recoveryWork?.cancel()
@@ -1014,7 +861,8 @@ final class EditorTabManager {
         guard source.resolvingSymlinksInPath().standardizedFileURL != target.resolvingSymlinksInPath().standardizedFileURL,
               !tabs.contains(where: { $0.url.standardizedFileURL == target.standardizedFileURL }),
               let content = getCachedContent(for: source) else { throw DocumentFileStore.Failure.conflict }
-        try DocumentFileStore.create(content, at: target)
+        try files.documents.create(content, at: target)
+        files.events.publish(.init(url: target, change: .documentCopied(from: source)))
         relocateTabs(from: source, to: target)
         if let index = findTab(with: target) {
             editStates[target]?.markAsSaved()
@@ -1025,72 +873,4 @@ final class EditorTabManager {
         }
         persistClosedTabs()
     }
-}
-
-/// Events invalidate our snapshot; only a fresh read can determine document state.
-/// Parent + file watches survive atomic replacement, and the presenter cooperates with macOS apps.
-private final class OpenDocumentMonitor: NSObject, NSFilePresenter {
-    let presentedItemURL: URL?
-    let presentedItemOperationQueue: OperationQueue = {
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        return queue
-    }()
-    private var sources: [DispatchSourceFileSystemObject] = []
-    private var pending: DispatchWorkItem?
-    private let onChange: () -> Void
-    private var stopped = false
-
-    init(url: URL, onChange: @escaping () -> Void) {
-        presentedItemURL = url
-        self.onChange = onChange
-        super.init()
-        NSFileCoordinator.addFilePresenter(self)
-        reconnect()
-    }
-
-    func reconnect() {
-        guard !stopped, let url = presentedItemURL else { return }
-        for source in sources { source.cancel() }
-        sources.removeAll()
-        for target in [url, url.deletingLastPathComponent()] {
-            let fd = open(target.path, O_EVTONLY)
-            guard fd >= 0 else { continue }
-            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd,
-                eventMask: [.write, .extend, .attrib, .delete, .rename, .revoke], queue: .main)
-            source.setEventHandler { [weak self] in self?.changed() }
-            source.setCancelHandler { close(fd) }
-            source.resume()
-            sources.append(source)
-        }
-    }
-
-    private func changed() {
-        pending?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.stopped else { return }
-            self.reconnect()
-            self.onChange()
-        }
-        pending = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
-    }
-
-    func presentedItemDidChange() { DispatchQueue.main.async { [weak self] in self?.changed() } }
-    func presentedItemDidMove(to newURL: URL) { presentedItemDidChange() }
-    func accommodatePresentedItemDeletion(completionHandler: @escaping (Error?) -> Void) {
-        presentedItemDidChange()
-        completionHandler(nil)
-    }
-
-    func stop() {
-        guard !stopped else { return }
-        stopped = true
-        pending?.cancel()
-        for source in sources { source.cancel() }
-        sources.removeAll()
-        NSFileCoordinator.removeFilePresenter(self)
-    }
-
-    deinit { stop() }
 }

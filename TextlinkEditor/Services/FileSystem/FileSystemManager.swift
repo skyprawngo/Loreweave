@@ -20,8 +20,8 @@ final class FileSystemManager {
     var selectedItem: FileSystemItem?
 
     /// 파일 시스템 변경 감시자
-    private var fileWatcher: DispatchSourceFileSystemObject?
-    private var watchedDirectoryHandle: Int32 = -1
+    private let files: WorkspaceFileCoordinator
+    private var fileEventObserver: NSObjectProtocol?
     var operationError: String?
     var revision = 0
     private var directoryWatchers: [String: DispatchSourceFileSystemObject] = [:]
@@ -43,7 +43,27 @@ final class FileSystemManager {
         }
     }
 
-    private init() {}
+    init(files: WorkspaceFileCoordinator = .shared) {
+        self.files = files
+        fileEventObserver = files.events.observe { [weak self] event in
+            guard let self, let root = self.projectRootURL,
+                  DocumentFileStore.contains(event.url, in: root) || {
+                      if case .moved(let old) = event.change { return DocumentFileStore.contains(old, in: root) }
+                      return false
+                  }() else { return }
+            switch event.change {
+            case .documentContentAccepted, .saved: break
+            default:
+                // Coalesce with the command's own item updates; never refresh the tree inside a mutation.
+                DispatchQueue.main.async { [weak self] in
+                    guard self?.projectRootURL == root else { return }
+                    self?.refreshProject()
+                }
+            }
+        }
+    }
+
+    deinit { if let fileEventObserver { files.events.remove(fileEventObserver) }; stopWatching() }
 
     // MARK: - 프로젝트 초기화
 
@@ -59,7 +79,6 @@ final class FileSystemManager {
 
         // 루트 자식 로드
         loadChildren(of: rootItem)
-
 
         // 파일 감시 시작
         startWatching(at: url)
@@ -85,21 +104,24 @@ final class FileSystemManager {
         guard item.isDirectory else { return }
 
         do {
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: item.url.standardizedFileURL,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )
+            let contents = try files.children(at: item.url)
 
             var newChildren: [FileSystemItem] = []
+            let folderIcons: [String: String]
+            if let projectRootURL {
+                do { folderIcons = try FolderAppearanceStore(projectURL: projectRootURL).load() }
+                catch { folderIcons = [:]; operationError = error.localizedDescription }
+            } else {
+                folderIcons = [:]
+            }
             let existingChildren = item.children ?? []
             // URL 비교 시 standardizedFileURL.path 사용 (유니코드 정규화 문제 해결)
             let existingByPath = Dictionary(uniqueKeysWithValues: existingChildren.map {
-                ($0.url.standardizedFileURL.path, $0)
+                (WorkspaceFileIdentity.key($0.url), $0)
             })
 
             for url in contents {
-                let standardizedPath = url.standardizedFileURL.path
+                let standardizedPath = WorkspaceFileIdentity.key(url)
                 // 기존 항목이 있으면 재사용 (상태 유지)
                 if let existing = existingByPath[standardizedPath] {
                     newChildren.append(existing)
@@ -112,6 +134,13 @@ final class FileSystemManager {
                 }
             }
 
+            if let projectRootURL {
+                let store = FolderAppearanceStore(projectURL: projectRootURL)
+                for child in newChildren where child.isDirectory {
+                    let key = try? store.pathKey(for: child.url)
+                    child.customFolderIcon = key.flatMap { folderIcons[$0] }.flatMap(FolderIcon.init(rawValue:))?.rawValue
+                }
+            }
             item.children = newChildren
             item.sortChildren()
             revision += 1
@@ -138,6 +167,19 @@ final class FileSystemManager {
 
     // MARK: - 파일/폴더 생성
 
+    func setFolderIcon(_ icon: FolderIcon?, for item: FileSystemItem) throws {
+        guard item.isDirectory, let projectRootURL else { throw CocoaError(.fileNoSuchFile) }
+        try FolderAppearanceStore(projectURL: projectRootURL).setIcon(icon, for: item.url)
+        item.customFolderIcon = icon?.rawValue
+        revision += 1
+    }
+
+    private func relocateFolderAppearance(from source: URL, to destination: URL, copying: Bool = false) {
+        guard let projectRootURL else { return }
+        do { try FolderAppearanceStore(projectURL: projectRootURL).relocate(from: source, to: destination, copying: copying) }
+        catch { operationError = error.localizedDescription }
+    }
+
     /// 새 폴더 생성
     @discardableResult
     func createFolder(named name: String, in parent: FileSystemItem) -> FileSystemItem? {
@@ -146,7 +188,7 @@ final class FileSystemManager {
         let newURL = parent.url.appendingPathComponent(name)
 
         do {
-            try FileManager.default.createDirectory(at: newURL, withIntermediateDirectories: false)
+            try files.createDirectory(at: newURL)
             let newItem = FileSystemItem(url: newURL, isDirectory: true, parent: parent)
 
             if parent.children == nil {
@@ -171,7 +213,7 @@ final class FileSystemManager {
 
         do {
             try DocumentFileStore.validateName(name)
-            try DocumentFileStore.create(content, at: newURL)
+            try files.documents.create(content, at: newURL)
             let newItem = FileSystemItem(url: newURL, isDirectory: false, parent: parent)
 
             if parent.children == nil {
@@ -187,93 +229,6 @@ final class FileSystemManager {
         }
     }
 
-    /// 새 파일 생성 다이얼로그 표시
-    func showNewFileDialog(in parent: FileSystemItem, completion: @escaping (FileSystemItem?) -> Void) {
-        guard let window = NSApp.keyWindow else {
-            completion(nil)
-            return
-        }
-
-        let alert = NSAlert()
-        alert.messageText = L10n.get("explorer.newFile")
-        alert.informativeText = L10n.get("explorer.enterFileName")
-        alert.addButton(withTitle: L10n.common.confirm)
-        alert.addButton(withTitle: L10n.common.cancel)
-
-        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 250, height: 24))
-        textField.placeholderString = L10n.get("explorer.fileNamePlaceholder")
-        textField.stringValue = "untitled.md"
-        alert.accessoryView = textField
-
-        // 다이얼로그 표시 (좌우 화살표 키 네비게이션 활성화)
-        alert.beginSheetModalWithArrowNavigation(for: window) { response in
-            if response == .alertFirstButtonReturn {
-                let name = textField.stringValue.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty {
-                    let item = self.createFile(named: name, in: parent)
-                    completion(item)
-                } else {
-                    completion(nil)
-                }
-            } else {
-                completion(nil)
-            }
-        }
-
-        // 텍스트 필드에 포커스 및 확장자 앞까지 선택
-        alert.window.makeFirstResponder(textField)
-        DispatchQueue.main.async {
-            let fileName = textField.stringValue
-            let nsFileName = fileName as NSString
-            let baseName = nsFileName.deletingPathExtension
-            if !baseName.isEmpty && baseName.count < fileName.count {
-                // 확장자가 있는 경우: 확장자 앞까지 선택
-                textField.currentEditor()?.selectedRange = NSRange(location: 0, length: (baseName as NSString).length)
-            } else {
-                // 확장자가 없는 경우: 전체 선택
-                textField.selectText(nil)
-            }
-        }
-    }
-
-    /// 새 폴더 생성 다이얼로그 표시
-    func showNewFolderDialog(in parent: FileSystemItem, completion: @escaping (FileSystemItem?) -> Void) {
-        guard let window = NSApp.keyWindow else {
-            completion(nil)
-            return
-        }
-
-        let alert = NSAlert()
-        alert.messageText = L10n.get("explorer.newFolder")
-        alert.informativeText = L10n.get("explorer.enterFolderName")
-        alert.addButton(withTitle: L10n.common.confirm)
-        alert.addButton(withTitle: L10n.common.cancel)
-
-        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 250, height: 24))
-        textField.placeholderString = L10n.get("explorer.folderNamePlaceholder")
-        textField.stringValue = L10n.get("explorer.newFolderDefault")
-        alert.accessoryView = textField
-
-        // 좌우 화살표 키 네비게이션 활성화
-        alert.beginSheetModalWithArrowNavigation(for: window) { response in
-            if response == .alertFirstButtonReturn {
-                let name = textField.stringValue.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty {
-                    let item = self.createFolder(named: name, in: parent)
-                    completion(item)
-                } else {
-                    completion(nil)
-                }
-            } else {
-                completion(nil)
-            }
-        }
-
-        // 텍스트 필드에 포커스 및 전체 선택
-        alert.window.makeFirstResponder(textField)
-        textField.selectText(nil)
-    }
-
     // MARK: - 이름 변경
 
     /// 항목 이름 변경
@@ -283,9 +238,8 @@ final class FileSystemManager {
 
         do {
             try DocumentFileStore.validateName(newName)
-            EditorTabManager.shared.flushEditor()
-            try FileManager.default.moveItem(at: item.url, to: newURL)
-            EditorTabManager.shared.relocateTabs(from: item.url, to: newURL)
+            try files.move(from: item.url, to: newURL)
+            if item.isDirectory { relocateFolderAppearance(from: item.url, to: newURL) }
 
             // FileSystemItem은 클래스이므로 URL을 직접 변경할 수 없음
             // 부모의 children을 새로고침해야 함
@@ -300,56 +254,6 @@ final class FileSystemManager {
         }
     }
 
-    /// 이름 변경 다이얼로그 표시
-    func showRenameDialog(for item: FileSystemItem, completion: @escaping (Bool) -> Void) {
-        guard let window = NSApp.keyWindow else {
-            completion(false)
-            return
-        }
-
-        let alert = NSAlert()
-        alert.messageText = L10n.get("explorer.rename")
-        alert.informativeText = L10n.get("explorer.enterNewName")
-        alert.addButton(withTitle: L10n.common.confirm)
-        alert.addButton(withTitle: L10n.common.cancel)
-
-        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 250, height: 24))
-        textField.stringValue = item.name
-        alert.accessoryView = textField
-
-        // 좌우 화살표 키 네비게이션 활성화
-        alert.beginSheetModalWithArrowNavigation(for: window) { response in
-            if response == .alertFirstButtonReturn {
-                let newName = textField.stringValue.trimmingCharacters(in: .whitespaces)
-                if !newName.isEmpty && newName != item.name {
-                    let success = self.rename(item, to: newName)
-                    completion(success)
-                } else {
-                    completion(false)
-                }
-            } else {
-                completion(false)
-            }
-        }
-
-        // 텍스트 필드에 포커스 및 확장자 앞까지 선택 (파일인 경우)
-        alert.window.makeFirstResponder(textField)
-        DispatchQueue.main.async {
-            let fileName = textField.stringValue
-            if !item.isDirectory {
-                let nsFileName = fileName as NSString
-                let baseName = nsFileName.deletingPathExtension
-                if !baseName.isEmpty && baseName.count < fileName.count {
-                    // 확장자가 있는 경우: 확장자 앞까지 선택
-                    textField.currentEditor()?.selectedRange = NSRange(location: 0, length: (baseName as NSString).length)
-                    return
-                }
-            }
-            // 폴더이거나 확장자가 없는 경우: 전체 선택
-            textField.selectText(nil)
-        }
-    }
-
     // MARK: - 삭제
 
     /// 항목 삭제
@@ -358,10 +262,6 @@ final class FileSystemManager {
         // macOS 파일 시스템의 유니코드 정규화 (NFD) 문제 해결
         // item.url이 실제 파일 시스템의 URL과 다를 수 있으므로 standardizedFileURL 사용
         let fileURL = item.url.standardizedFileURL
-
-        let manager = EditorTabManager.shared
-        let affected = manager.tabs.filter { DocumentFileStore.contains($0.url, in: fileURL) }
-        guard manager.prepareToClose(affected) else { return false }
 
         // 파일이 실제로 존재하는지 확인
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
@@ -374,8 +274,11 @@ final class FileSystemManager {
         }
 
         do {
-            try FileManager.default.trashItem(at: fileURL, resultingItemURL: nil)
-            manager.closeTabsUnder(folderURL: fileURL)
+            guard try files.trash(fileURL) else { return false }
+            if item.isDirectory, let projectRootURL {
+                do { try FolderAppearanceStore(projectURL: projectRootURL).remove(for: fileURL) }
+                catch { operationError = error.localizedDescription }
+            }
 
             // 부모의 children에서 제거
             if let parent = item.parent {
@@ -389,62 +292,6 @@ final class FileSystemManager {
         }
     }
 
-    /// 삭제 확인 다이얼로그 표시
-    func showDeleteConfirmation(for item: FileSystemItem, completion: @escaping (Bool) -> Void) {
-        guard let window = NSApp.keyWindow else {
-            completion(false)
-            return
-        }
-
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = L10n.get("explorer.deleteConfirmTitle")
-        alert.informativeText = String(format: L10n.get("explorer.deleteConfirmMessage"), item.name)
-        alert.addButton(withTitle: L10n.common.delete)
-        alert.addButton(withTitle: L10n.common.cancel)
-
-        // 좌우 화살표 키 네비게이션 활성화
-        alert.beginSheetModalWithArrowNavigation(for: window) { response in
-            if response == .alertFirstButtonReturn {
-                let success = self.delete(item)
-                completion(success)
-            } else {
-                completion(false)
-            }
-        }
-    }
-
-    /// 다중 항목 삭제 확인 다이얼로그 표시
-    func showMultipleDeleteConfirmation(for items: [FileSystemItem], completion: @escaping (Bool) -> Void) {
-        guard let window = NSApp.keyWindow else {
-            completion(false)
-            return
-        }
-
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = L10n.get("explorer.deleteConfirmTitle")
-        alert.informativeText = String(format: L10n.get("explorer.deleteMultipleConfirmMessage"), items.count)
-        alert.addButton(withTitle: L10n.common.delete)
-        alert.addButton(withTitle: L10n.common.cancel)
-
-        // 좌우 화살표 키 네비게이션 활성화
-        alert.beginSheetModalWithArrowNavigation(for: window) { response in
-            if response == .alertFirstButtonReturn {
-                var allSuccess = true
-                for item in items {
-                    let success = self.delete(item)
-                    if !success {
-                        allSuccess = false
-                    }
-                }
-                completion(allSuccess)
-            } else {
-                completion(false)
-            }
-        }
-    }
-
     // MARK: - 이동 (드래그 앤 드롭)
 
     /// 수정된 파일 이동 전 확인 다이얼로그 결과
@@ -453,90 +300,10 @@ final class FileSystemManager {
         case cancel
     }
 
-    /// 수정된 파일 이동 전 확인 다이얼로그
-    /// 파일이 수정 상태에 있어 이동 불가 - 저장 후 이동 여부 확인
-    func showModifiedFileMoveDialog(
-        fileName: String,
-        completion: @escaping (ModifiedFileMoveResult) -> Void
-    ) {
-        guard let window = NSApp.keyWindow else {
-            completion(.cancel)
-            return
-        }
-
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = L10n.get("explorer.modifiedFileMoveTitle")
-        alert.informativeText = L10n.get("explorer.modifiedFileMoveMessage")
-        alert.addButton(withTitle: L10n.get("explorer.saveAndMove"))
-        alert.addButton(withTitle: L10n.common.cancel)
-
-        // 좌우 화살표 키 네비게이션 활성화
-        alert.beginSheetModalWithArrowNavigation(for: window) { response in
-            switch response {
-            case .alertFirstButtonReturn:
-                completion(.saveAndMove)
-            default:
-                completion(.cancel)
-            }
-        }
-    }
-
     /// 이름 충돌 다이얼로그 결과
     enum NameConflictResult {
         case rename(String)  // 새 이름으로 이동
         case cancel
-    }
-
-    /// 이름 충돌 다이얼로그
-    /// 대상 디렉토리에 같은 이름의 파일이 존재할 때 표시
-    func showNameConflictDialog(
-        fileName: String,
-        completion: @escaping (NameConflictResult) -> Void
-    ) {
-        guard let window = NSApp.keyWindow else {
-            completion(.cancel)
-            return
-        }
-
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = L10n.get("explorer.nameConflictTitle")
-        alert.informativeText = L10n.get("explorer.nameConflictMessage")
-        alert.addButton(withTitle: L10n.common.save)
-        alert.addButton(withTitle: L10n.common.cancel)
-
-        // 이름 변경 텍스트 필드
-        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        textField.stringValue = fileName
-        alert.accessoryView = textField
-
-        // 텍스트 필드에 포커스 및 확장자 앞 이름 선택
-        alert.window.makeFirstResponder(textField)
-
-        // 확장자 앞까지 선택 (예: "file.md" -> "file" 선택)
-        let nsFileName = fileName as NSString
-        let extensionStart = nsFileName.deletingPathExtension.count
-        if extensionStart > 0 && extensionStart < fileName.count {
-            textField.currentEditor()?.selectedRange = NSRange(location: 0, length: extensionStart)
-        } else {
-            textField.selectText(nil)
-        }
-
-        // 좌우 화살표 키 네비게이션 활성화
-        alert.beginSheetModalWithArrowNavigation(for: window) { response in
-            switch response {
-            case .alertFirstButtonReturn:
-                let newName = textField.stringValue.trimmingCharacters(in: .whitespaces)
-                if !newName.isEmpty && newName != fileName {
-                    completion(.rename(newName))
-                } else {
-                    completion(.cancel)
-                }
-            default:
-                completion(.cancel)
-            }
-        }
     }
 
     /// 대상 디렉토리에 같은 이름의 파일이 있는지 확인
@@ -565,9 +332,8 @@ final class FileSystemManager {
         do {
             try DocumentFileStore.validateName(targetName)
             guard !DocumentFileStore.contains(destination.url, in: item.url) else { throw DocumentFileStore.Failure.invalidName }
-            EditorTabManager.shared.flushEditor()
-            try FileManager.default.moveItem(at: item.url, to: newURL)
-            EditorTabManager.shared.relocateTabs(from: item.url, to: newURL)
+            try files.move(from: item.url, to: newURL)
+            if item.isDirectory { relocateFolderAppearance(from: item.url, to: newURL) }
 
             // 이전 부모에서 제거
             if let oldParent = item.parent {
@@ -604,7 +370,8 @@ final class FileSystemManager {
         }
 
         do {
-            try FileManager.default.copyItem(at: item.url, to: newURL)
+            try files.copy(from: item.url, to: newURL)
+            if item.isDirectory { relocateFolderAppearance(from: item.url, to: newURL, copying: true) }
             loadChildren(of: destination)
             return true
         } catch {
@@ -614,16 +381,6 @@ final class FileSystemManager {
     }
 
     // MARK: - Finder에서 열기
-
-    /// Finder에서 항목 표시
-    func revealInFinder(_ item: FileSystemItem) {
-        NSWorkspace.shared.activateFileViewerSelecting([item.url])
-    }
-
-    /// 기본 앱으로 열기
-    func openWithDefaultApp(_ item: FileSystemItem) {
-        NSWorkspace.shared.open(item.url)
-    }
 
     // MARK: - 파일 감시
 
@@ -641,6 +398,7 @@ final class FileSystemManager {
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
         source.setEventHandler { [weak self, weak item] in
             guard let self, let item, self.projectRootURL == owner else { return }
+            self.files.events.publish(.init(url: item.url, change: .invalidated))
             self.loadChildren(of: item)
         }
         source.setCancelHandler { close(fd) }
@@ -665,7 +423,6 @@ final class FileSystemManager {
     func refreshProject() {
         guard let rootItem = projectRoot else { return }
         loadChildren(of: rootItem)
-
 
         // 펼쳐진 하위 폴더도 새로고침
         refreshExpandedChildren(of: rootItem)
@@ -713,7 +470,7 @@ final class FileSystemManager {
     func findItem(by url: URL) -> FileSystemItem? {
         guard let root = projectRoot else { return nil }
 
-        if root.url == url {
+        if WorkspaceFileIdentity.same(root.url, url) {
             return root
         }
 
@@ -724,7 +481,7 @@ final class FileSystemManager {
         guard let children = parent.children else { return nil }
 
         for child in children {
-            if child.url == url {
+            if WorkspaceFileIdentity.same(child.url, url) {
                 return child
             }
             if child.isDirectory, let found = findItemRecursively(in: child, url: url) {

@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(prefix="lore-project-replace-") as scratch:
     scratch = Path(scratch)
     main = scratch / "main.swift"
     main.write_text(code)
-    sources = ["TextlinkEditor/Services/FileSystem/DocumentFileStore.swift", "TextlinkEditor/Services/Versions/VersionHistoryStore.swift", "TextlinkEditor/Services/Editor/ProjectReplacementStore.swift"]
+    sources = [str(p.relative_to(root)) for p in (root / "TextlinkEditor/Services/FileSystem/Workspace").glob("*.swift")] + ["TextlinkEditor/Services/FileSystem/DocumentFileStore.swift", "TextlinkEditor/Services/Versions/VersionHistoryStore.swift", "TextlinkEditor/Services/Editor/ProjectReplacementStore.swift"]
     executable = scratch / "check"
     subprocess.run(["swiftc", "-O", *[str(root / p) for p in sources], str(main), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)

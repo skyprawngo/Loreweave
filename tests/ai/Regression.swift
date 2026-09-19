@@ -76,7 +76,21 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkEditorAIRegression-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
+        try checkHistoryRepository(in: folder)
         let a = folder.appendingPathComponent("A.weaveproj")
+        let model = AIModelOption.parse(["model": "fixture-model", "displayName": "Fixture", "supportedReasoningEfforts": [["reasoningEffort": "low"], ["reasoningEffort": "high"]]])!
+        expect(model.efforts == ["low", "high"], "model catalog retains supported efforts")
+        expect(AIModelOption.parse(["model": "hidden", "hidden": true]) == nil, "hidden models excluded")
+        let options = AIRequestOptions(model: model.id, effort: "high")
+        expect(options.arguments(for: .chatgpt) == ["--model", "fixture-model", "-c", "model_reasoning_effort=\"high\""], "Codex model and effort use explicit CLI arguments")
+        expect(options.arguments(for: .claude) == ["--model", "fixture-model", "--effort", "high"], "Claude model and effort use provider flags")
+        let usage = AIContextUsage.parse(["type": "turn.completed", "usage": ["input_tokens": 1200, "cached_input_tokens": 800, "output_tokens": 50]])!
+        expect(usage.inputTokens == 1200 && usage.cachedTokens == 800 && usage.contextWindow == nil, "Codex totals do not double count cache or invent capacity")
+        let claudeUsage = AIContextUsage.parse(["type": "result", "usage": ["input_tokens": 100, "cache_read_input_tokens": 800, "cache_creation_input_tokens": 100, "output_tokens": 50], "modelUsage": ["fixture": ["contextWindow": 200000]]])!
+        expect(claudeUsage.inputTokens == 1000 && claudeUsage.contextWindow == 200000, "Claude usage includes cache and reported capacity")
+        let usageMessage = AIMessage(role: .assistant, content: "answer", usage: usage)
+        let decodedUsageMessage = try JSONDecoder().decode(AIMessage.self, from: JSONEncoder().encode(usageMessage))
+        expect(decodedUsageMessage == usageMessage, "usage survives history encoding")
         let b = folder.appendingPathComponent("B.weaveproj")
         let root = UUID()
         let user = AIMessage(id: root, role: .user, content: "first", conversationId: root)
@@ -146,7 +160,39 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(kill(childPID, 0) == -1 && errno == ESRCH, "Cancellation terminates inherited CLI child processes")
         try fixture("cat >/dev/null\nexec /bin/sleep 30\n")
         // View-model regression: an old request cannot attach its result to the new project.
-        let vm = AIAssistantViewModel()
+        let suite = "TextlinkEditor.ModelPreferencesTest." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let vm = AIAssistantViewModel(modelDefaults: defaults)
+        expect(vm.models(for: .chatgpt).contains { $0.id == "gpt-6-astra" }, "Astra remains explicitly selectable with an older catalog")
+        let catalogAstra = AIModelOption(id: "gpt-6-astra", name: "Catalog Astra", efforts: ["medium", "ultra"], defaultEffort: "medium")
+        vm.availableModels = [catalogAstra]
+        expect(vm.models(for: .chatgpt).filter { $0.id == "gpt-6-astra" } == [catalogAstra], "live Astra metadata takes priority without duplicates")
+        vm.availableModels = [model]
+        vm.modelSelections = ["chatgpt": model.id]
+        vm.modelPreferences.effortSelections = ["chatgpt": "ultra"]
+        expect(vm.requestOptions(for: .chatgpt).effort == "low", "unsupported saved effort is never forwarded")
+        vm.modelPreferences.effortSelections["chatgpt"] = "high"
+        expect(vm.requestOptions(for: .chatgpt).model == model.id && vm.requestOptions(for: .chatgpt).effort == "high", "selected model and supported effort captured together")
+        expect(vm.requestOptions(for: .claude).model == "sonnet", "provider selections remain independent")
+        vm.selectModel("gpt-6-astra", for: .chatgpt)
+        expect(vm.requestOptions(for: .chatgpt).effort == "high", "switching model preserves compatible last effort")
+        vm.selectEffort("max", for: .chatgpt)
+        let restored = AIAssistantViewModel(modelDefaults: defaults)
+        expect(restored.requestOptions(for: .chatgpt).model == "gpt-6-astra" && restored.requestOptions(for: .chatgpt).effort == "max", "last chosen model and effort survive recreation")
+        vm.selectModel(model.id, for: .chatgpt)
+        expect(vm.requestOptions(for: .chatgpt).effort == "low", "unsupported last effort becomes a supported concrete value")
+        vm.selectEffort("", for: .chatgpt)
+        expect(vm.requestOptions(for: .chatgpt).effort == "low", "empty default step cannot overwrite saved effort")
+        vm.selectModel("sonnet", for: .claude)
+        vm.selectEffort("high", for: .claude)
+        vm.selectModel("opus", for: .claude, category: .inlineEdit)
+        vm.selectEffort("low", for: .claude, category: .inlineEdit)
+        let separate = AIAssistantViewModel(modelDefaults: defaults)
+        expect(separate.requestOptions(for: .claude).model == "sonnet" && separate.requestOptions(for: .claude).effort == "high", "sidebar preferences persist separately")
+        expect(separate.requestOptions(for: .claude, category: .inlineEdit).model == "opus" && separate.requestOptions(for: .claude, category: .inlineEdit).effort == "low", "inline preferences persist separately")
+        vm.modelSelections = [:]
+        vm.modelPreferences.effortSelections = [:]
         vm.completeConnection(.claude)
         vm.setProject(a)
         vm.inputText = "slow A request"
@@ -201,10 +247,19 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         let replacementJSON = String(decoding: try JSONSerialization.data(withJSONObject: ["replacement":"검정"]), as: UTF8.self)
         let editJSON = String(decoding: try JSONSerialization.data(withJSONObject: ["type":"result", "subtype":"success", "result":replacementJSON]), as: UTF8.self)
         try fixture("cat >/dev/null\nprintf '%s\\n' '" + editJSON + "'\n")
+        vm.selectModel("sonnet", for: .claude)
+        vm.selectEffort("high", for: .claude)
+        vm.selectModel("opus", for: .claude, category: .inlineEdit)
+        vm.selectEffort("low", for: .claude, category: .inlineEdit)
         vm.errorMessage = "existing sidebar error"
         vm.sendMessage(continueFromCardId: sidebarConversation, inlineInput: "검정으로 수정", inlineRevision: edit)
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
         expect(fullText == (editBase as NSString).replacingCharacters(in: NSRange(location: 0, length: 5), with: "검정"), "inline edit executes replacement on captured range")
+        expect(vm.messages.last?.model == "opus" && vm.messages.last?.reasoningEffort == "low" && vm.messages.last?.provider == "claude", "inline dispatch snapshots independent model and effort")
+        let savedIndex = try JSONAIHistoryRepository().load(from: b)!.metadata
+        let inlineRecord = savedIndex.conversations.first { $0.id == vm.messages.last?.conversationId }
+        expect(savedIndex.schemaVersion == 2 && inlineRecord?.category == .inlineEdit && inlineRecord?.requestIds == [vm.messages.last!.id], "history indexes category, conversation and request IDs")
+        expect(savedIndex.conversations.contains { $0.category == .chat }, "normal and inline histories have separate category entries")
         expect(vm.messages.last?.kind == "inlineEdit" && vm.messages.last?.outcome == "completed", "inline edit records applied outcome separately")
         expect(ChatHistoryManager.shared.loadSession(from: b)?.messages.last?.kind == "inlineEdit", "inline category survives history persistence")
         let firstEditConversation = vm.messages.last!.conversationId
@@ -254,11 +309,17 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
             try ("#!/bin/sh\nprintf '%s\n' \"$@\" > arguments.log\ncat >/dev/null\n" + body).write(to: codexExecutable, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codexExecutable.path)
         }
+        func tracked(_ id: UUID, _ before: [String: String]) throws -> AIWorkspaceTrackingExecutor {
+            try AIContextSelection.shared.persist(AIContextManifest(entries: [], text: "fixture"), requestID: id, projectURL: workspace)
+            return AIWorkspaceTrackingExecutor(base: manager, requestID: id, project: workspace, before: before) { error in
+                preconditionFailure("workspace reconciliation failed: \(error)")
+            }
+        }
         try codexFixture("printf 'first\\n새로운문장' > draft.md\nprintf 'created' > new.md\nrm removed.txt\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Explanation, not workspaceManuscript text\"}}' '{\"type\":\"turn.completed\"}'\n")
-        _ = try await manager.sendPrompt("edit", cliType: .chatgpt, workingDirectory: workspace, allowsWorkspaceEdits: true) { _ in }
+        _ = try await tracked(editID, before).sendPrompt("edit", cliType: .chatgpt, workingDirectory: workspace, sessionId: nil, allowsWorkspaceEdits: true, options: options) { _ in }
         let arguments = try String(contentsOf: workspace.appendingPathComponent("arguments.log"), encoding: .utf8)
+        expect(arguments.contains("fixture-model") && arguments.contains("model_reasoning_effort=\"high\""), "selected model and effort reach spawned process")
         expect(arguments.contains("workspace-write") && arguments.contains(workspace.path) && !arguments.contains("danger-full-access"), "normal Codex explicitly bounds workspace writing")
-        try AIWorkspaceEdits.finish(id: editID, before: before, project: workspace)
         let edits = AIWorkspaceEdits.load(id: editID, project: workspace)!
         expect(edits.changes.count == 3, "created, deleted and edited files recorded")
         let changed = edits.changes.first { $0.relativePath == "draft.md" }!
@@ -270,19 +331,17 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(try! String(contentsOf: workspace.appendingPathComponent("arguments.log"), encoding: .utf8).contains("read-only"), "inline/default CLI remains read-only")
         let failedID = UUID(), failedBefore = try AIWorkspaceEdits.snapshot(project: workspace)
         try codexFixture("printf 'partial' > draft.md\nexit 7\n")
-        do { _ = try await manager.sendPrompt("fail after write", cliType: .chatgpt, workingDirectory: workspace, allowsWorkspaceEdits: true) { _ in }; preconditionFailure("expected failure") } catch {}
-        try AIWorkspaceEdits.finish(id: failedID, before: failedBefore, project: workspace)
+        do { _ = try await tracked(failedID, failedBefore).sendPrompt("fail after write", cliType: .chatgpt, workingDirectory: workspace, sessionId: nil, allowsWorkspaceEdits: true, options: .init()) { _ in }; preconditionFailure("expected failure") } catch {}
         expect(AIWorkspaceEdits.load(id: failedID, project: workspace)?.changes.first?.after == "partial", "partial writes remain comparable after process failure")
         let cancelledID = UUID(), cancelledBefore = try AIWorkspaceEdits.snapshot(project: workspace)
         try codexFixture("printf 'cancelled write' > draft.md\nexec /bin/sleep 30\n")
-        let pendingEdit = Task { try await manager.sendPrompt("cancel after write", cliType: .chatgpt, workingDirectory: workspace, allowsWorkspaceEdits: true) { _ in } }
+        let pendingEdit = Task { try await tracked(cancelledID, cancelledBefore).sendPrompt("cancel after write", cliType: .chatgpt, workingDirectory: workspace, sessionId: nil, allowsWorkspaceEdits: true, options: .init()) { _ in } }
         for _ in 0..<100 {
             if (try? String(contentsOf: workspaceManuscript, encoding: .utf8)) == "cancelled write" { break }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         pendingEdit.cancel()
         do { _ = try await pendingEdit.value; preconditionFailure("expected cancellation") } catch {}
-        try AIWorkspaceEdits.finish(id: cancelledID, before: cancelledBefore, project: workspace)
         expect(AIWorkspaceEdits.load(id: cancelledID, project: workspace)?.changes.first?.after == "cancelled write", "partial writes remain comparable after cancellation")
         try ManuscriptRevisionBridge.remove(id: editID, project: workspace)
         expect(!AIWorkspaceEdits.exists(id: editID, project: workspace), "history cleanup removes actual revision records")

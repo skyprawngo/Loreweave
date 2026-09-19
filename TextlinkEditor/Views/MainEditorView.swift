@@ -351,9 +351,9 @@ struct MainEditorView: View {
             }
         }
         .sheet(isPresented: $showingNewProject) {
-            NewProjectSheet(projectName: $newProjectName, selectedDirectory: $newProjectDirectory, projectManager: projectManager) {
+            NewProjectSheet(projectName: $newProjectName, selectedDirectory: $newProjectDirectory, projectManager: projectManager) { options in
                 guard let directory = newProjectDirectory,
-                      projectManager.createProject(name: newProjectName, at: directory) != nil else { return }
+                      projectManager.createProject(name: newProjectName, at: directory, options: options) != nil else { return }
                 showingNewProject = false
                 newProjectName = ""
                 initializeFileSystem()

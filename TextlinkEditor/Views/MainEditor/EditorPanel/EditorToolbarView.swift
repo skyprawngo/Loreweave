@@ -7,14 +7,20 @@ struct EditorToolbarView: View {
     @Binding var lineSpacingOption: LineSpacingOption
     @Binding var letterSpacing: CGFloat
     @Binding var fontName: String
+    var isMarkdownPreview = false
     var onToolAction: ((String) -> Void)?
     @Binding var presentedTool: String?
     @State private var showingFormat = false
+    @AppStorage(EditorToolbarAppearance.iconSizeKey, store: EditorToolbarAppearance.store) private var storedIconSize = EditorToolbarAppearance.defaultIconSize
+    @AppStorage(EditorToolbarAppearance.heightKey, store: EditorToolbarAppearance.store) private var storedHeight = EditorToolbarAppearance.defaultHeight
+    private var iconSize: Double { EditorToolbarAppearance.bounded(storedIconSize, in: EditorToolbarAppearance.sizeRange, fallback: EditorToolbarAppearance.defaultIconSize) }
+    private var toolbarHeight: Double { EditorToolbarAppearance.bounded(storedHeight, in: EditorToolbarAppearance.heightRange, fallback: EditorToolbarAppearance.defaultHeight) }
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
-                formatButtons
+                formatButtons.disabled(isMarkdownPreview)
+                markdownPreviewButton
                 Divider().frame(height: 18)
                 FontPickerControl(fontName: $fontName, fontSize: $fontSize)
                 FontSizeControl(fontSize: $fontSize)
@@ -24,9 +30,10 @@ struct EditorToolbarView: View {
                 Spacer(minLength: 0)
             }
             HStack(spacing: 8) {
-                formatButtons
+                formatButtons.disabled(isMarkdownPreview)
+                markdownPreviewButton
                 Button { showingFormat.toggle() } label: {
-                    Label(L10n.get("toolbar.format"), systemImage: "textformat")
+                    Label(L10n.get("toolbar.format"), systemImage: "textformat").font(.system(size: iconSize))
                 }
                 .buttonStyle(.borderless)
                 .popover(isPresented: $showingFormat) {
@@ -55,7 +62,7 @@ struct EditorToolbarView: View {
         }
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .padding(.vertical, 3)
+        .frame(height: toolbarHeight)
         .popover(isPresented: Binding(get: { presentedTool != nil }, set: { if !$0 { presentedTool = nil } })) {
             VStack(alignment: .leading, spacing: 12) {
                 if presentedTool == "font" {
@@ -86,11 +93,23 @@ struct EditorToolbarView: View {
 
     private func formatButton(_ icon: String, _ title: String, _ format: MarkdownFormatType) -> some View {
         Button { onToolAction?("format.\(format)") } label: {
-            Image(systemName: icon).frame(width: 26, height: 26)
+            Image(systemName: icon).font(.system(size: iconSize)).frame(width: 26, height: 26)
         }
         .buttonStyle(.borderless)
         .help(title)
         .accessibilityLabel(title)
+    }
+
+    private var markdownPreviewButton: some View {
+        Button { onToolAction?("display.markdownPreview") } label: {
+            Image(systemName: isMarkdownPreview ? "chevron.left.forwardslash.chevron.right" : "textformat")
+                .font(.system(size: iconSize)).frame(width: 26, height: 26)
+                .foregroundStyle(isMarkdownPreview ? Color.accentColor : Color.primary)
+        }
+        .buttonStyle(.borderless)
+        .help(L10n.get(isMarkdownPreview ? "editor.markdown.source" : "editor.markdown.preview"))
+        .accessibilityLabel(L10n.get("editor.markdown.toggle"))
+        .accessibilityValue(L10n.get(isMarkdownPreview ? "editor.markdown.preview" : "editor.markdown.source"))
     }
 
     private var aiToolsMenu: some View {
@@ -99,7 +118,7 @@ struct EditorToolbarView: View {
                 Button(L10n.get(tool.titleKey)) { onToolAction?(tool.id) }
             }
         } label: {
-            Image(systemName: "wand.and.stars").frame(width: 26, height: 26)
+            Image(systemName: "wand.and.stars").font(.system(size: iconSize)).frame(width: 26, height: 26)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -111,6 +130,8 @@ struct EditorToolbarView: View {
 }
 
 private struct FontSizeControl: View {
+    @AppStorage(EditorToolbarAppearance.numberSizeKey, store: EditorToolbarAppearance.store) private var storedNumberSize = EditorToolbarAppearance.defaultNumberSize
+    private var numberSize: Double { EditorToolbarAppearance.bounded(storedNumberSize, in: EditorToolbarAppearance.sizeRange, fallback: EditorToolbarAppearance.defaultNumberSize) }
     @Binding var fontSize: CGFloat
     private var value: Binding<Double> {
         Binding(get: { Double(fontSize) }, set: { if $0.isFinite { fontSize = min(72, max(8, $0)) } })
@@ -118,7 +139,7 @@ private struct FontSizeControl: View {
     var body: some View {
         HStack(spacing: 4) {
             ScrubbableNumberField(title: L10n.editor.fontSize, value: value, range: 8...72, step: 1)
-            Text("pt").foregroundStyle(.secondary)
+            Text("pt").font(.system(size: numberSize)).foregroundStyle(.secondary)
         }
         .fixedSize()
         .help(L10n.editor.fontSize)
@@ -126,13 +147,15 @@ private struct FontSizeControl: View {
 }
 
 private struct LetterSpacingControl: View {
+    @AppStorage(EditorToolbarAppearance.iconSizeKey, store: EditorToolbarAppearance.store) private var storedIconSize = EditorToolbarAppearance.defaultIconSize
+    private var iconSize: Double { EditorToolbarAppearance.bounded(storedIconSize, in: EditorToolbarAppearance.sizeRange, fallback: EditorToolbarAppearance.defaultIconSize) }
     @Binding var letterSpacing: CGFloat
     private var value: Binding<Double> {
         Binding(get: { Double(letterSpacing) }, set: { if $0.isFinite { letterSpacing = min(20, max(-5, $0)) } })
     }
     var body: some View {
         HStack(spacing: 4) {
-            Text("AV").font(.caption).kerning(2).accessibilityHidden(true)
+            Text("AV").font(.system(size: iconSize)).kerning(2).accessibilityHidden(true)
             ScrubbableNumberField(title: L10n.get("editor.letterSpacing"), value: value, range: -5...20, step: 0.1)
         }
         .fixedSize()
@@ -142,6 +165,8 @@ private struct LetterSpacingControl: View {
 
 /// Click to type; drag the displayed value horizontally to scrub without selecting text.
 private struct ScrubbableNumberField: View {
+    @AppStorage(EditorToolbarAppearance.numberSizeKey, store: EditorToolbarAppearance.store) private var storedNumberSize = EditorToolbarAppearance.defaultNumberSize
+    private var numberSize: Double { EditorToolbarAppearance.bounded(storedNumberSize, in: EditorToolbarAppearance.sizeRange, fallback: EditorToolbarAppearance.defaultNumberSize) }
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>
@@ -157,7 +182,7 @@ private struct ScrubbableNumberField: View {
 
     private var fieldWidth: CGFloat {
         let text = isEditing ? draft : formattedValue
-        let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: numberSize, weight: .regular)
         return max(18, ceil((text as NSString).size(withAttributes: [.font: font]).width) + 4)
     }
 
@@ -202,9 +227,9 @@ private struct ScrubbableNumberField: View {
                     }
             }
         }
-        .font(.system(size: NSFont.smallSystemFontSize).monospacedDigit())
+        .font(.system(size: numberSize).monospacedDigit())
         .multilineTextAlignment(.trailing)
-        .frame(width: fieldWidth, height: 22)
+        .frame(width: fieldWidth, height: max(22, numberSize + 6))
         .help(title)
     }
 
@@ -236,7 +261,7 @@ private struct LineSpacingControl: View {
     }
 }
 
-private struct FontPickerControl: View {
+struct FontPickerControl: View {
     @Binding var fontName: String
     @Binding var fontSize: CGFloat
 
@@ -307,19 +332,14 @@ private class FontPanelDelegate: NSObject {
 }
 
 enum LineSpacingOption: CGFloat, CaseIterable, Identifiable {
-    case normal = 1.0       // 100%
-    case relaxed = 1.25     // 125%
-    case loose = 1.5        // 150%
-    case extraLoose = 1.75  // 175%
+    // Persist the displayed ratio; rendering uses the recalibrated 100% baseline.
+    case compact = 0.9
+    case normal = 1.0
+    case relaxed = 1.25
+    case loose = 1.5
+    case doubleSpacing = 2.0
 
     var id: CGFloat { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .normal: return "100%"
-        case .relaxed: return "125%"
-        case .loose: return "150%"
-        case .extraLoose: return "175%"
-        }
-    }
+    var displayName: String { "\(Int((rawValue * 100).rounded()))%" }
+    var lineHeightMultiple: CGFloat { rawValue * 1.25 }
 }

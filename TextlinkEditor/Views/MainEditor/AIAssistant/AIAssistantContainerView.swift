@@ -157,6 +157,39 @@ struct AIConnectionSettingsContent: View {
                         ChatGPTAccountView(service: viewModel.chatGPTAccount, compact: false)
                     }
                 }
+                ForEach(AIConversationCategory.allCases, id: \.self) { category in
+                    Section(L10n.get(category == .chat ? "ai.settings.sidebar" : "ai.settings.inline")) {
+                        Picker(L10n.get("ai.model.title"), selection: Binding(
+                            get: { viewModel.selectedModel(for: cliType, category: category)?.id ?? "" },
+                            set: { viewModel.selectModel($0, for: cliType, category: category) })) {
+                            if viewModel.selectedModel(for: cliType, category: category) == nil {
+                                Text(L10n.get("ai.model.choose")).tag("")
+                            }
+                            ForEach(viewModel.models(for: cliType)) { model in
+                                Text(model.name).tag(model.id)
+                            }
+                        }
+                        Picker(L10n.get("ai.effort.title"), selection: Binding(
+                            get: { viewModel.requestOptions(for: cliType, category: category).effort ?? "" },
+                            set: { viewModel.selectEffort($0, for: cliType, category: category) })) {
+                            if viewModel.requestOptions(for: cliType, category: category).effort == nil {
+                                Text(L10n.get("ai.effort.unavailable")).tag("")
+                            }
+                            ForEach(viewModel.selectedModel(for: cliType, category: category)?.efforts ?? [], id: \.self) { effort in
+                                Text(L10n.get("ai.effort." + effort)).tag(effort)
+                            }
+                        }
+                        .disabled(viewModel.selectedModel(for: cliType, category: category)?.efforts.isEmpty ?? true)
+                        Text(L10n.get("ai.settings.separateDefaults")).font(.caption).foregroundStyle(.secondary)
+                        if cliType == .chatgpt {
+                            Button(L10n.get("ai.model.refresh")) { Task { await viewModel.refreshModels() } }
+                        }
+                    }
+                }
+                .disabled(viewModel.isProcessing || viewModel.modelsLoading)
+                .task(id: cliType) {
+                    if cliType == .chatgpt { await viewModel.refreshModels() }
+                }
                 Section {
                     Button(L10n.get("ai.chat.disconnect")) { viewModel.disconnect() }
                         .disabled(viewModel.isProcessing)

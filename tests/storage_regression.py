@@ -242,12 +242,92 @@ sync.openFile(FileSystemItem(url: unreadTab, isDirectory: false))
 try FileManager.default.removeItem(at: unreadTab)
 waitFor("unloaded restored-style tab still tracks deletion") { sync.diskState(for: unreadTab) == .missing }
 sync.closeTab(at: sync.findTab(with: unreadTab)!)
+
+// Isolated architecture integration: participants and events share one scoped coordinator.
+let bus = WorkspaceFileEvents()
+let files = WorkspaceFileCoordinator(events: bus)
+let ownedProject = base.appendingPathComponent("Owned.weaveproj")
+try FileManager.default.createDirectory(at: ownedProject, withIntermediateDirectories: true)
+let owned = EditorTabManager(recoveryDirectory: base.appendingPathComponent("owned-recovery"), files: files)
+owned.restoreSession(from: ownedProject)
+let oldPath = ownedProject.appendingPathComponent("old.md")
+try files.documents.create("base", at: oldPath)
+owned.openFile(FileSystemItem(url: oldPath, isDirectory: false))
+owned.setEditState(TabEditState(content: "local draft", originalContent: "base"), for: oldPath)
+let identity = owned.tabs[0].id
+var commits: [WorkspaceFileEvent] = []
+let listener = bus.observe { commits.append($0) }
+let movedPath = ownedProject.appendingPathComponent("new.md")
+try files.move(from: oldPath, to: movedPath)
+expect(owned.tabs[0].url == movedPath && owned.tabs[0].id == identity, "committed move event updates tab identity and path")
+expect(owned.getCachedContent(for: movedPath) == "local draft", "move event preserves unsaved buffer")
+let occupied = ownedProject.appendingPathComponent("occupied.md")
+try files.documents.create("occupied", at: occupied)
+let commitCount = commits.count
+do { try files.move(from: movedPath, to: occupied); fatalError("must not overwrite target") } catch {}
+expect(commits.count == commitCount && owned.tabs[0].url == movedPath, "failed move publishes no commit and leaves tab ownership unchanged")
+NSAlert.responses = [.alertThirdButtonReturn]
+expect(try! !files.trash(movedPath), "document participant vetoes deletion before disk mutation")
+expect(FileManager.default.fileExists(atPath: movedPath.path) && owned.tabs.count == 1, "cancelled delete preserves file and tab")
+let beforeFailedSave = commits.count
+do { try files.documents.save("overwrite", at: movedPath, expected: "stale"); fatalError("must reject stale write") } catch {}
+expect(commits.count == beforeFailedSave, "failed save publishes no success event")
+owned.setCachedContent("base", for: movedPath)
+try files.documents.save("changed through repository", at: movedPath, expected: "base")
+waitFor("repository save event refreshes the same editor state") { owned.getCachedContent(for: movedPath) == "changed through repository" }
+expect(DocumentReconciliation.decide(base: "a", draft: "a", disk: "b") == .adoptDisk, "clean document adopts disk by common policy")
+expect(DocumentReconciliation.decide(base: "a", draft: "b", disk: "c") == .conflict, "divergent versions conflict by common policy")
+expect(DocumentReconciliation.decide(base: "a", draft: "b", disk: "b") == .adoptDisk, "converged versions become saved by common policy")
+let ticket = DocumentReadIdentity(requestID: UUID(), documentID: identity, base: "a")
+expect(!ticket.matches(requestID: UUID(), documentID: identity, base: "a"), "read ticket rejects older request generation")
+expect(!ticket.matches(requestID: ticket.requestID, documentID: UUID(), base: "a"), "read ticket rejects replacement document")
+expect(!ticket.matches(requestID: ticket.requestID, documentID: identity, base: "b"), "read ticket rejects changed save baseline")
+bus.remove(listener)
+_ = owned.closeAllTabs(force: true)
+
+final class DelayedDocumentRepository: WorkspaceDocumentRepository {
+    var pending: [CheckedContinuation<String, Error>] = []
+    func read(_ url: URL) throws -> String { "base" }
+    func readSnapshot(_ url: URL) async throws -> String {
+        try await withCheckedThrowingContinuation { pending.append($0) }
+    }
+    func save(_ content: String, at url: URL, expected: String) throws {}
+    func create(_ content: String, at url: URL) throws {}
+}
+let delayed = DelayedDocumentRepository()
+let reader = DocumentObservationController(repository: delayed, events: WorkspaceFileEvents())
+let readURL = URL(fileURLWithPath: "/fixture.md")
+let readDocumentID = UUID()
+var readBase = "base"
+var accepted: [String] = []
+reader.identity = { _ in (readDocumentID, readBase) }
+reader.receive = { _, result in if case .success(let text) = result { accepted.append(text) } }
+reader.requestRead(readURL)
+waitFor("first asynchronous read started") { delayed.pending.count == 1 }
+reader.requestRead(readURL)
+waitFor("replacement asynchronous read started") { delayed.pending.count == 2 }
+delayed.pending[1].resume(returning: "new")
+waitFor("latest asynchronous result accepted") { accepted == ["new"] }
+delayed.pending[0].resume(returning: "obsolete")
+RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+expect(accepted == ["new"], "late cancelled read cannot overwrite newer content")
+reader.requestRead(readURL)
+waitFor("baseline test read started") { delayed.pending.count == 3 }
+readBase = "saved during read"
+delayed.pending[2].resume(returning: "pre-save snapshot")
+waitFor("changed baseline triggers fresh read") { delayed.pending.count == 4 }
+expect(accepted == ["new"], "pre-save snapshot is never published")
+delayed.pending[3].resume(returning: "post-save snapshot")
+waitFor("fresh baseline result accepted") { accepted.last == "post-save snapshot" }
+reader.stop()
 print("ALL STORAGE REGRESSIONS PASSED")
+
+
 '''
 with tempfile.TemporaryDirectory(prefix="textlinkeditor-storage-tests-") as work:
     work = Path(work)
     (work / "main.swift").write_text(swift)
-    subprocess.run(["xcrun", "swiftc", str(root / "TextlinkEditor/Services/FileSystem/DocumentFileStore.swift"),
-                    str(root / "TextlinkEditor/Services/Editor/EditorTabManager.swift"), str(root / "TextlinkEditor/Services/Versions/VersionHistoryStore.swift"), str(root / "TextlinkEditor/Services/Writing/WritingWorkspaceStore.swift"), str(work / "main.swift"),
+    subprocess.run(["xcrun", "swiftc", str(root / "TextlinkEditor/Services/FileSystem/DocumentFileStore.swift"), *[str(p) for p in (root / "TextlinkEditor/Services/FileSystem/Workspace").glob("*.swift")],
+                    str(root / "TextlinkEditor/Services/Editor/EditorTabManager.swift"), *[str(p) for p in (root / "TextlinkEditor/Services/Editor/Session").glob("*.swift")], str(root / "TextlinkEditor/Services/Versions/VersionHistoryStore.swift"), str(root / "TextlinkEditor/Services/Writing/WritingWorkspaceStore.swift"), str(work / "main.swift"),
                     "-o", str(work / "regression")], check=True)
     subprocess.run([str(work / "regression")], check=True)

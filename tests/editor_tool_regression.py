@@ -22,6 +22,14 @@ let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), 
 window.contentView = host
 window.makeFirstResponder(view)
 window.orderFront(nil)
+view.load("**원고**")
+view.setSelectedRange(NSRange(location: 2, length: 2))
+var requestedPreview = false
+view.onToolPresentation = { requestedPreview = $0 == "markdownPreview" }
+let beforePreviewSelection = view.selectedRange()
+view.execute(EditorCommand(.tool("display.markdownPreview")))
+expect(requestedPreview && view.string == "**원고**" && view.selectedRange() == beforePreviewSelection, "registered preview tool preserves source and selection")
+expect(view.undoManager?.canUndo == false, "preview tool does not create a manuscript undo entry")
 let manager = view.textLayoutManager!
 var events: [EditorToolBridge.Event] = []
 view.toolBridge.onEvent = { events.append($0) }

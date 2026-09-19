@@ -134,6 +134,25 @@ final class ChatGPTAccountService {
         } catch { limits = L10n.get("ai.oauth.limitsUnavailable") }
     }
 
+    func availableModels() async throws -> [AIModelOption] {
+        let owner = generation
+        let client = try await server()
+        var models: [AIModelOption] = []
+        var cursor: String?
+        var seen = Set<String>()
+        repeat {
+            var params: [String: Any] = ["limit": 100, "includeHidden": false]
+            if let cursor { params["cursor"] = cursor }
+            let result = try await client.request("model/list", params)
+            guard owner == generation, !Task.isCancelled else { throw CancellationError() }
+            guard let data = result["data"] as? [[String: Any]] else { throw CodexAccountRPC.Failure.protocolError }
+            models += data.compactMap(AIModelOption.parse).filter { option in !models.contains { $0.id == option.id } }
+            cursor = result["nextCursor"] as? String
+            if let cursor, !seen.insert(cursor).inserted { throw CodexAccountRPC.Failure.protocolError }
+        } while cursor != nil
+        return models
+    }
+
     private func server() async throws -> CodexAccountRPC {
         if let rpc, rpc.running { return rpc }
         let owner = generation
@@ -161,7 +180,7 @@ final class ChatGPTAccountService {
     }
 }
 
-/// Bounded JSONL RPC transport; only account APIs are used, no model requests or secret payload logging.
+/// Bounded JSONL RPC transport; account and model catalog APIs only, no inference or secret payload logging.
 @MainActor
 final class CodexAccountRPC {
     enum Failure: Error { case unavailable, protocolError, stopped, timeout }

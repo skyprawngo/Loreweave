@@ -33,7 +33,16 @@ struct TabBarView: View {
                                     isDragging: draggingTabId == tab.id,
                                     isDragOver: dragOverTabId == tab.id,
                                     onSelect: { tabManager.selectTab(at: index) },
-                                    onClose: { tabManager.closeTab(at: index) }
+                                    onClose: { tabManager.closeTab(at: index) },
+                                    onRename: { name in
+                                        guard let current = tabManager.tabs.first(where: { $0.id == tab.id }), current.fileExists else { return false }
+                                        if name == current.title { return true }
+                                        let item = fileSystemManager.findItem(by: current.url)
+                                            ?? FileSystemItem(url: current.url, isDirectory: false)
+                                        let renamed = fileSystemManager.rename(item, to: name)
+                                        if renamed { fileSystemManager.refreshProject() }
+                                        return renamed
+                                    }
                                 )
                                 .id(tab.id)
                                 .onDrag {
@@ -71,6 +80,10 @@ struct TabBarView: View {
             .frame(height: geometry.size.height, alignment: .center)
         }
         .frame(height: 36)
+        .background(TabContextMenuRegion(priority: 0, actions: [
+            .init(title: L10n.get("explorer.newFile"), enabled: fileSystemManager.targetDirectoryForNewFile != nil,
+                  perform: showNewFileDialog)
+        ]))
         .animation(.smooth(duration: 0.24), value: tabManager.selectedTabIndex)
     }
 
@@ -96,6 +109,8 @@ struct TabItemView: View {
     var isDragOver: Bool = false
     let onSelect: () -> Void
     let onClose: () -> Void
+    var onRename: (String) -> Bool = { _ in false }
+    @State private var isRenaming = false
 
     @State private var isHovering = false
     @State private var isCloseButtonHovering = false
@@ -167,13 +182,22 @@ struct TabItemView: View {
             }
             .frame(width: 14, height: 14)
 
-            Text(title)
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .strikethrough(!fileExists, color: .secondary)
-                .foregroundStyle(fileExists ? AppColors.tabText : .secondary)
+            if isRenaming {
+                TabNameEditor(title: title, onCommit: { name in
+                    if onRename(name) { isRenaming = false; return true }
+                    return false
+                }, onCancel: { isRenaming = false })
+                .frame(maxWidth: .infinity)
+                .frame(height: 14)
+            } else {
+                Text(title)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .strikethrough(!fileExists, color: .secondary)
+                    .foregroundStyle(fileExists ? AppColors.tabText : .secondary)
+            }
         }
         .frame(width: max(30, width - 26))
         .padding(.leading, 12)
@@ -205,7 +229,11 @@ struct TabItemView: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onSelect() }
         .accessibilityAction(named: Text(L10n.tabs.close)) { onClose() }
-        .onTapGesture(perform: onSelect)
+        .onTapGesture { if !isRenaming { onSelect() } }
+        .background(TabContextMenuRegion(priority: 1, actions: [
+            .init(title: L10n.get("explorer.rename"), enabled: fileExists, perform: { isRenaming = true }),
+            .init(title: L10n.tabs.close, perform: onClose)
+        ]))
         .onHover { hovering in
             isHovering = hovering
         }
@@ -221,6 +249,136 @@ struct TabItemView: View {
                     showSavedIndicator = false
                 }
             }
+        }
+    }
+}
+
+/// Toolbar customization consumes secondary clicks before SwiftUI contextMenu.
+/// Route only clicks inside visible tab regions; leave all other window events alone.
+private struct TabContextMenuRegion: NSViewRepresentable {
+    struct Action {
+        let title: String
+        var enabled = true
+        let perform: () -> Void
+    }
+    let priority: Int
+    let actions: [Action]
+    func makeNSView(context: Context) -> RegionView { RegionView() }
+    func updateNSView(_ view: RegionView, context: Context) {
+        view.priority = priority
+        view.actions = actions
+    }
+    static func dismantleNSView(_ view: RegionView, coordinator: ()) { view.unregister() }
+
+    final class RegionView: NSView {
+        private static let regions = NSHashTable<RegionView>.weakObjects()
+        private static var monitor: Any?
+        var priority = 0
+        var actions: [Action] = []
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            unregister()
+            guard window != nil else { return }
+            Self.regions.add(self)
+            if Self.monitor == nil {
+                Self.monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { event in
+                    guard event.type == .rightMouseDown || event.modifierFlags.contains(.control) else { return event }
+                    let region = Self.regions.allObjects.filter {
+                        $0.window === event.window && !$0.isHiddenOrHasHiddenAncestor &&
+                        $0.visibleRect.intersection($0.bounds).contains($0.convert(event.locationInWindow, from: nil))
+                    }.max { $0.priority < $1.priority }
+                    guard let region else { return event }
+                    let menu = NSMenu()
+                    menu.autoenablesItems = false
+                    for (index, action) in region.actions.enumerated() {
+                        let item = NSMenuItem(title: action.title, action: #selector(RegionView.invoke(_:)), keyEquivalent: "")
+                        item.target = region
+                        item.tag = index
+                        item.isEnabled = action.enabled
+                        menu.addItem(item)
+                    }
+                    NSMenu.popUpContextMenu(menu, with: event, for: region)
+                    return nil
+                }
+            }
+        }
+        func unregister() {
+            Self.regions.remove(self)
+            if Self.regions.allObjects.isEmpty, let monitor = Self.monitor {
+                NSEvent.removeMonitor(monitor)
+                Self.monitor = nil
+            }
+        }
+        @objc private func invoke(_ item: NSMenuItem) {
+            guard actions.indices.contains(item.tag), actions[item.tag].enabled else { return }
+            actions[item.tag].perform()
+        }
+    }
+}
+
+/// A native field keeps IME, Return/Escape and focus handling inside the tab.
+private struct TabNameEditor: NSViewRepresentable {
+    let title: String
+    let onCommit: (String) -> Bool
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: title)
+        field.font = .systemFont(ofSize: 12)
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.lineBreakMode = .byClipping
+        field.delegate = context.coordinator
+        field.setAccessibilityLabel(L10n.get("explorer.rename"))
+        context.coordinator.field = field
+        context.coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak coordinator = context.coordinator] event in
+            guard let coordinator, let field = coordinator.field, !coordinator.finished else { return event }
+            if event.window !== field.window || !field.bounds.contains(field.convert(event.locationInWindow, from: nil)) {
+                coordinator.commit()
+            }
+            return event
+        }
+        DispatchQueue.main.async { [weak field] in
+            guard let field, let window = field.window else { return }
+            window.makeFirstResponder(field)
+            // Keep the extension visible while selecting the basename for replacement.
+            let basename = (title as NSString).deletingPathExtension
+            (field.currentEditor() as? NSTextView)?.setSelectedRange(NSRange(location: 0, length: basename.utf16.count))
+        }
+        return field
+    }
+    func updateNSView(_ field: NSTextField, context: Context) { context.coordinator.parent = self }
+    static func dismantleNSView(_ field: NSTextField, coordinator: Coordinator) {
+        coordinator.finished = true
+        field.delegate = nil
+        if let monitor = coordinator.monitor { NSEvent.removeMonitor(monitor); coordinator.monitor = nil }
+    }
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: TabNameEditor
+        weak var field: NSTextField?
+        var monitor: Any?
+        var finished = false
+        init(_ parent: TabNameEditor) { self.parent = parent }
+        func commit() {
+            guard !finished, let field else { return }
+            // End IME composition before reading the committed field value.
+            (field.currentEditor() as? NSTextView)?.unmarkText()
+            let name = field.currentEditor()?.string ?? field.stringValue
+            finished = true
+            if !parent.onCommit(name) { finished = false }
+        }
+        func controlTextDidEndEditing(_ notification: Notification) { commit() }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.insertNewline(_:)) { commit(); return true }
+            if selector == #selector(NSResponder.cancelOperation(_:)) {
+                finished = true
+                parent.onCancel()
+                return true
+            }
+            return false
         }
     }
 }

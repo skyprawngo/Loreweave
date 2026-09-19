@@ -14,6 +14,11 @@ enum AIMessageRole: String, Codable {
     case system = "system"
 }
 
+enum AIConversationCategory: String, Codable, CaseIterable {
+    case chat, inlineEdit
+    var title: String { L10n.get(self == .chat ? "ai.inline.chatHistory" : "ai.inline.history") }
+}
+
 /// 채팅 메시지
 struct AIMessage: Identifiable, Codable, Equatable {
     let id: UUID
@@ -24,6 +29,11 @@ struct AIMessage: Identifiable, Codable, Equatable {
     var conversationId: UUID?
     var outcome: String?
     var kind: String?
+    var usage: AIContextUsage?
+    var provider: String?
+    var model: String?
+    var reasoningEffort: String?
+    var category: AIConversationCategory { kind == "inlineEdit" ? .inlineEdit : .chat }
 
     init(
         id: UUID = UUID(),
@@ -33,7 +43,9 @@ struct AIMessage: Identifiable, Codable, Equatable {
         isStreaming: Bool = false,
         conversationId: UUID? = nil,
         outcome: String? = nil,
-        kind: String? = nil
+        kind: String? = nil,
+        usage: AIContextUsage? = nil,
+        provider: String? = nil, model: String? = nil, reasoningEffort: String? = nil
     ) {
         self.id = id
         self.role = role
@@ -43,10 +55,14 @@ struct AIMessage: Identifiable, Codable, Equatable {
         self.conversationId = conversationId
         self.outcome = outcome
         self.kind = kind
+        self.usage = usage
+        self.provider = provider
+        self.model = model
+        self.reasoningEffort = reasoningEffort
     }
 
     static func == (lhs: AIMessage, rhs: AIMessage) -> Bool {
-        lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming && lhs.conversationId == rhs.conversationId && lhs.outcome == rhs.outcome && lhs.kind == rhs.kind
+        lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming && lhs.conversationId == rhs.conversationId && lhs.outcome == rhs.outcome && lhs.kind == rhs.kind && lhs.usage == rhs.usage && lhs.provider == rhs.provider && lhs.model == rhs.model && lhs.reasoningEffort == rhs.reasoningEffort
     }
 }
 
@@ -106,5 +122,23 @@ struct AIChatSession: Codable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.cliSessionId = cliSessionId
+    }
+}
+
+/// Reported turn totals, not an estimate of the current context-window occupancy.
+struct AIContextUsage: Codable, Equatable {
+    let inputTokens: Int
+    let cachedTokens: Int
+    let outputTokens: Int
+    let contextWindow: Int?
+    static func parse(_ event: [String: Any]) -> Self? {
+        guard let usage = event["usage"] as? [String: Any], let input = usage["input_tokens"] as? Int else { return nil }
+        let claude = event["type"] as? String == "result"
+        let cached = (usage[claude ? "cache_read_input_tokens" : "cached_input_tokens"] as? Int) ?? 0
+        let created = claude ? (usage["cache_creation_input_tokens"] as? Int ?? 0) : 0
+        let models = event["modelUsage"] as? [String: [String: Any]]
+        let capacity = models?.count == 1 ? models?.values.first?["contextWindow"] as? Int : nil
+        return Self(inputTokens: max(0, input + (claude ? cached + created : 0)), cachedTokens: max(0, cached),
+                    outputTokens: max(0, usage["output_tokens"] as? Int ?? 0), contextWindow: capacity)
     }
 }

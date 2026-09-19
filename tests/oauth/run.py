@@ -69,6 +69,6 @@ final class CLIDetector {
 '''
 with tempfile.TemporaryDirectory(prefix='textlinkeditor-oauth-test-') as d:
  p=Path(d);f=p/'fixture';f.write_text(fixture);f.chmod(0o700);h=p/'Regression.swift';h.write_text(harness)
- subprocess.run(['xcrun','swiftc','-parse-as-library',str(root/'TextlinkEditor/Services/AI/Auth/ChatGPTAccountService.swift'),str(h),'-o',str(p/'test')],check=True)
+ subprocess.run(['xcrun','swiftc','-parse-as-library',str(root/'TextlinkEditor/Services/AI/Auth/ChatGPTAccountService.swift'),str(root/'TextlinkEditor/Services/AI/Models/AICLIType.swift'),str(h),'-o',str(p/'test')],check=True)
  env=dict(os.environ,OPENAI_API_KEY='fixture-not-real',CODEX_ACCESS_TOKEN='fixture-not-real')
  subprocess.run([str(p/'test'),str(f),str(p/'private')],env=env,check=True,timeout=40)
