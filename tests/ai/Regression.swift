@@ -17,6 +17,8 @@ struct TestEditorTab { var url: URL; var title: String }
     var selectedTab: TestEditorTab?
     func flushEditor() {}
     func prepareForAIWorkspaceEdit(project: URL) throws {}
+    func validateAIApplication(project: URL) throws {}
+    func collaborationDrafts(project: URL) -> [String: String] { [:] }
     func isModified(url: URL) -> Bool { false }
     func getCachedContent(for url: URL) -> String? { nil }
 }
@@ -28,6 +30,28 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
 
 @main struct AIRegression {
     @MainActor static func main() async throws {
+        if CommandLine.arguments.contains("--live-collaboration") {
+            let project = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkEditor-Collaboration-Live-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: project.appendingPathComponent("설정"), withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: project) }
+            try "민수는 범인을 모른다. 범인은 도윤이다.".write(to: project.appendingPathComponent("설정/인물.md"), atomically: true, encoding: .utf8)
+            try "민수는 말했다. 나는 범인을 모른다.".write(to: project.appendingPathComponent("원고.md"), atomically: true, encoding: .utf8)
+            let store = CollaborationStore(project: project)
+            try store.enable()
+            let original = try store.snapshot()
+            let task = try store.enqueue(origin: "comment", instruction: "민수는 처음부터 도윤이 범인임을 알고 있고 숨기거나 거짓말하지 않는다고 확정한다. 설정/인물.md는 정확히 '민수는 처음부터 도윤이 범인임을 안다.'로, 원고.md는 정확히 '민수는 말했다. 도윤이 범인임을 처음부터 알았다.'로 수정하라. 확정 설정을 원문과 연결해 색인하라. 줄바꿈은 추가하지 마라.")
+            _ = try await CollaborationEngine(store: store, executor: CLIProcessManager()).execute(taskID: task, provider: .chatgpt, options: .init())
+            let after = try store.snapshot()
+            precondition(after["설정/인물.md"] == "민수는 처음부터 도윤이 범인임을 안다.")
+            precondition(after["원고.md"] == "민수는 말했다. 도윤이 범인임을 처음부터 알았다.")
+            let completed = try store.load().tasks.first?.phase == .completed
+            precondition(completed)
+            try CollaborationApplier(store: store).undo(taskID: task)
+            let restored = try store.snapshot()
+            precondition(restored == original)
+            print("PASS existing OAuth: live isolated collaboration, two document apply, journal and undo")
+            return
+        }
         if CommandLine.arguments.contains("--live-workspace") {
             let project = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkEditor-Live-" + UUID().uuidString + ".weaveproj")
             try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
@@ -77,6 +101,7 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         try checkHistoryRepository(in: folder)
+        try await checkCollaboration(in: folder)
         let a = folder.appendingPathComponent("A.weaveproj")
         let model = AIModelOption.parse(["model": "fixture-model", "displayName": "Fixture", "supportedReasoningEfforts": [["reasoningEffort": "low"], ["reasoningEffort": "high"]]])!
         expect(model.efforts == ["low", "high"], "model catalog retains supported efforts")
@@ -112,7 +137,13 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         let executable = folder.appendingPathComponent("claude")
         UserSettings.shared.path = executable
         func fixture(_ body: String) throws {
-            try ("#!/bin/sh\n" + body).write(to: executable, atomically: true, encoding: .utf8)
+            let proposal = ["summary": "new response", "edits": [], "questions": [], "facts": []] as [String: Any]
+            let json = String(decoding: try JSONSerialization.data(withJSONObject: proposal), as: UTF8.self)
+            let encoded = String(decoding: try JSONEncoder().encode(json), as: UTF8.self)
+            let adapted = body.replacingOccurrences(of: "\"result\":\"new response\"", with: "\"result\":" + encoded)
+                .replacingOccurrences(of: "> arguments.log", with: "> '" + folder.path + "/arguments.log'")
+                .replacingOccurrences(of: "> prompt.log", with: "> '" + folder.path + "/prompt.log'")
+            try ("#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + folder.path + "/arguments.log'\n" + adapted).write(to: executable, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         }
         try fixture("cat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"fixture response\",\"session_id\":\"fixture\"}'\n")
@@ -203,13 +234,36 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(vm.messages.count == 1 && vm.messages[0].id == bUser.id, "Project switch drops old callbacks")
         expect(ChatHistoryManager.shared.loadSession(from: a)?.messages.last?.outcome == "cancelled", "Cancelled turn belongs to originating project")
         expect(ChatHistoryManager.shared.loadSession(from: b)?.messages.count == 1, "Old answer cannot overwrite B last card")
-        try fixture("cat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"new response\",\"session_id\":\"new\"}'\n")
+        try fixture("printf '%s\\n' \"$@\" > arguments.log\ncat > prompt.log\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"new response\",\"session_id\":\"new\"}'\n")
         vm.inputText = "B followup"
         vm.sendMessage(continueFromCardId: bUser.id)
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
         if vm.messages.last?.content != "new response" { FileHandle.standardError.write(Data(("Fixture failure: " + (vm.errorMessage ?? "none") + " content=" + (vm.messages.last?.content ?? "nil") + "\n").utf8)) }
         expect(vm.messages.last?.content == "new response" && vm.selectedCardId == bUser.id, "Followup stays in selected conversation")
         expect(vm.messages.last?.conversationId == bUser.id, "Followup identity remains persisted")
+        vm.setProject(a)
+        vm.setProject(b)
+        expect(vm.selectedCardId == bUser.id, "Reopening project restores its latest normal chat")
+        vm.inputText = "resume from project files"
+        vm.sendMessage()
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        let resumedArguments = try String(contentsOf: folder.appendingPathComponent("arguments.log"), encoding: .utf8)
+        let resumedPrompt = try String(contentsOf: folder.appendingPathComponent("prompt.log"), encoding: .utf8)
+        expect(resumedArguments.contains("--resume\nnew") && resumedArguments.contains("Read,Glob,Grep"), "Restored chat resumes provider session with project reading tools")
+        expect(resumedPrompt.contains("TextlinkCollaboration-") && !resumedPrompt.contains(b.path), "Chat runs against isolated copy with no live root in prompt")
+        expect(vm.resumableSession(for: bUser.id, provider: .chatgpt) == nil, "Provider sessions cannot be mixed")
+        try fixture("cat >/dev/null\nexit 7\n")
+        vm.inputText = "retry project question"
+        vm.sendMessage()
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        expect(vm.resumableSession(for: bUser.id, provider: .claude) == nil, "Failed session is detached")
+        try fixture("cat > prompt.log\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"new response\",\"session_id\":\"new\"}'\n")
+        vm.sendMessage()
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        let retryArguments = try String(contentsOf: folder.appendingPathComponent("arguments.log"), encoding: .utf8)
+        let retryPrompt = try String(contentsOf: folder.appendingPathComponent("prompt.log"), encoding: .utf8)
+        expect(!retryArguments.contains("--resume") && retryPrompt.contains("B followup") && retryPrompt.contains("new response"), "User retry reconstructs completed conversation when session is unavailable")
+        vm.selectedCardId = nil
         let manuscript = b.appendingPathComponent("manuscript.md")
         var fullText = "alpha\n한글 😀 원고 전체"
         try fullText.write(to: manuscript, atomically: true, encoding: .utf8)
@@ -263,6 +317,8 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(vm.messages.last?.kind == "inlineEdit" && vm.messages.last?.outcome == "completed", "inline edit records applied outcome separately")
         expect(ChatHistoryManager.shared.loadSession(from: b)?.messages.last?.kind == "inlineEdit", "inline category survives history persistence")
         let firstEditConversation = vm.messages.last!.conversationId
+        let inlineArguments = try String(contentsOf: folder.appendingPathComponent("arguments.log"), encoding: .utf8)
+        expect(!inlineArguments.contains("Read,Glob,Grep") && !inlineArguments.contains("--resume"), "Inline editing does not enable project tools or resume chat")
         expect(firstEditConversation != sidebarConversation, "inline edit always creates a new history conversation")
         expect(vm.selectedCardId == sidebarConversation && vm.inputText == "keep sidebar draft", "automatic edit does not display a new sidebar answer or replace its draft")
         expect(vm.errorMessage == "existing sidebar error", "inline success leaves sidebar errors unchanged")
@@ -280,6 +336,9 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(vm.errorMessage == "existing sidebar error" && vm.inlineErrorMessage == nil, "accepted inline failure appears only in history")
         expect(vm.messages.last?.content.contains("ordinary chat is not an edit") == true, "failed edit retains original AI response in history")
         expect(ChatHistoryManager.shared.loadSession(from: b)?.messages.last?.content == vm.messages.last?.content, "failed AI response survives persistence")
+        vm.setProject(a)
+        vm.setProject(b)
+        expect(vm.selectedCardId == inlineConversation, "Reopening ignores newer inline edits and selects latest normal conversation")
         let orphan = UUID()
         try AIContextSelection.shared.persist(manifest, requestID: orphan, projectURL: b)
         vm.clearHistory()
@@ -292,7 +351,9 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         vm.setProject(c); vm.includeCurrentDocument = true; vm.inputText = "failed artifact preparation"
         vm.sendMessage()
         expect(!vm.isProcessing && vm.messages.isEmpty, "artifact preparation failure prevents dispatch")
-        let residual = try FileManager.default.contentsOfDirectory(at: c.appendingPathComponent(".C.weavedata/ai-context"), includingPropertiesForKeys: nil)
+        let contextDirectory = c.appendingPathComponent(".C.weavedata/ai-context")
+        let residual = FileManager.default.fileExists(atPath: contextDirectory.path)
+            ? try FileManager.default.contentsOfDirectory(at: contextDirectory, includingPropertiesForKeys: nil) : []
         expect(residual.isEmpty, "failed revision preparation cleans already persisted manifest")
         let workspace = folder.appendingPathComponent("Workspace.weaveproj")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
@@ -318,6 +379,7 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         try codexFixture("printf 'first\\n새로운문장' > draft.md\nprintf 'created' > new.md\nrm removed.txt\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Explanation, not workspaceManuscript text\"}}' '{\"type\":\"turn.completed\"}'\n")
         _ = try await tracked(editID, before).sendPrompt("edit", cliType: .chatgpt, workingDirectory: workspace, sessionId: nil, allowsWorkspaceEdits: true, options: options) { _ in }
         let arguments = try String(contentsOf: workspace.appendingPathComponent("arguments.log"), encoding: .utf8)
+        expect(arguments.contains("exec\n-c\ncli_auth_credentials_store=\"keyring\"\n"), "exec receives existing OAuth keyring overrides in subcommand scope")
         expect(arguments.contains("fixture-model") && arguments.contains("model_reasoning_effort=\"high\""), "selected model and effort reach spawned process")
         expect(arguments.contains("workspace-write") && arguments.contains(workspace.path) && !arguments.contains("danger-full-access"), "normal Codex explicitly bounds workspace writing")
         let edits = AIWorkspaceEdits.load(id: editID, project: workspace)!
@@ -327,6 +389,21 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(edits.changes.first { $0.relativePath == "removed.txt" }?.after == nil, "deleted file retains original")
         expect(edits.changes.first { $0.relativePath == "new.md" }?.before == nil, "created file retains absent baseline")
         try codexFixture("printf '%s\\n' '{\"type\":\"turn.completed\"}'\n")
+        let codexRoot = UUID()
+        let codexUser = AIMessage(id: codexRoot, role: .user, content: "project memory", conversationId: codexRoot, provider: "chatgpt")
+        let codexAnswer = AIMessage(role: .assistant, content: "remembered", conversationId: codexRoot, outcome: "completed", provider: "chatgpt")
+        try ChatHistoryManager.shared.saveState(messages: [codexUser, codexAnswer], taggedIds: [], sessionIds: [codexRoot: "codex-project-session"], cliType: "chatgpt", to: workspace)
+        let restoredCodex = AIAssistantViewModel()
+        restoredCodex.setProject(workspace)
+        restoredCodex.completeConnection(.chatgpt)
+        expect(restoredCodex.selectedCardId == codexRoot, "New view model restores Codex project conversation")
+        let savedCodexSession = restoredCodex.resumableSession(for: codexRoot, provider: .chatgpt)
+        expect(savedCodexSession == "codex-project-session", "Codex session persists across view model restart")
+        _ = try await manager.sendPrompt("resume", cliType: .chatgpt, workingDirectory: workspace, sessionId: savedCodexSession, allowsWorkspaceEdits: true) { _ in }
+        let resumedCodexArguments = try String(contentsOf: workspace.appendingPathComponent("arguments.log"), encoding: .utf8)
+        expect(resumedCodexArguments.contains("resume\ncodex-project-session\n-") && resumedCodexArguments.contains("--cd\n" + workspace.path), "Codex uses explicit saved session and current project root")
+        restoredCodex.setProject(b)
+        expect(restoredCodex.resumableSession(for: codexRoot, provider: .chatgpt) == nil, "Project switch cannot reuse another project's Codex session")
         _ = try await manager.sendPrompt("inline", cliType: .chatgpt, workingDirectory: workspace) { _ in }
         expect(try! String(contentsOf: workspace.appendingPathComponent("arguments.log"), encoding: .utf8).contains("read-only"), "inline/default CLI remains read-only")
         let failedID = UUID(), failedBefore = try AIWorkspaceEdits.snapshot(project: workspace)

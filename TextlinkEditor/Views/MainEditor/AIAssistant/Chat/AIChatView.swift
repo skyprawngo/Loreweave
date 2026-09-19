@@ -540,6 +540,9 @@ struct AIChatView: View {
                             .background(message.role == .user ? Color.primary.opacity(0.05) : .clear,
                                         in: RoundedRectangle(cornerRadius: 12))
                             .contextMenu {
+                                Button(L10n.get("collaboration.fromChat")) {
+                                    AIAssistantViewModel.shared.collaboration.submitComment(message.content)
+                                }
                                 Button(L10n.get("common.copy")) {
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(message.content, forType: .string)
@@ -652,6 +655,9 @@ struct AIChatView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
+            // Opening the popover moves keyboard focus to its first control. Keep that
+            // focus available without drawing a selected outline around the model label.
+            .focusEffectDisabled()
             .fixedSize()
             .accessibilityLabel(L10n.get("ai.model.title"))
             .disabled(modelSettings.modelsLoading)

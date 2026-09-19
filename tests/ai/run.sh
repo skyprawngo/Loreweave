@@ -15,6 +15,7 @@ xcrun swiftc -parse-as-library \
   TextlinkEditor/Services/AI/Chat/*.swift \
   TextlinkEditor/Services/AI/Preferences/*.swift \
   TextlinkEditor/Services/AI/Requests/*.swift \
+  TextlinkEditor/Services/AI/Collaboration/*.swift \
   TextlinkEditor/Services/AI/Prompt/AIPromptTemplateManager.swift \
   TextlinkEditor/Services/AI/Context/AIContextSelection.swift \
   TextlinkEditor/Services/AI/Revision/ManuscriptRevision.swift \
@@ -24,5 +25,6 @@ xcrun swiftc -parse-as-library \
   TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift \
   TextlinkEditor/Views/MainEditor/AIAssistant/AIAssistantViewModel.swift \
   tests/ai/HistoryRepositoryRegression.swift \
+  tests/ai/CollaborationRegression.swift \
   tests/ai/Regression.swift -o "$task_dir/regression"
 "$task_dir/regression" "$@"

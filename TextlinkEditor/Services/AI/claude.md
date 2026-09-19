@@ -11,6 +11,10 @@
 
 ## 저장 형식
 
+일반 채팅은 프로젝트 루트의 텍스트 문서를 격리 사본에 복사해 작업 디렉토리로 사용하고, 프로젝트를 다시 열면 현재 제공자의 최근 일반 대화를 기본으로 선택한다. 후속 요청은 대화별 저장된 제공자 세션 ID로 재개한다(Codex `exec resume`, Claude `--resume`). 매번 현재 사본의 경로와 최신 문서를 우선하도록 안내한다. 새 대화는 새 세션이며 인라인 편집은 항상 독립 요청이다. 세션은 마지막 완료 응답의 제공자가 일치할 때만 사용한다. 실패·취소 후에는 세션 연결을 해제하고 사용자가 재시도하면 저장된 완료 대화로 문맥을 구성한다. 앱 기록은 프로젝트에, 제공자의 원본 세션은 해당 CLI 저장소에 있으므로 프로젝트 복사만으로 외부 세션까지 이동되지는 않는다.
+
+프로젝트 파일은 지속 참조 자료다. 일반 요청은 현재 루트의 관련 파일을 검색·읽고 최신 내용으로 답변하도록 안내한다. 전체 파일 자동 첨부나 무제한 모델 기억을 뜻하지 않는다. Claude 일반 채팅은 safe-mode 안에서 Read/Glob/Grep만 허용하며 인라인은 빈 tools를 유지한다.
+
 `Chat/AIHistoryRepository.swift`의 `AIHistoryRepository`가 프로젝트별 저장 계약이다. 기본 구현은 `.{프로젝트명}.weavedata/ai-sessions/history-store.json`에 메시지 카드와 대화/요청 인덱스를 하나의 원자적 snapshot으로 저장한다. `ChatHistoryManager`는 기존 호출자용 호환 facade다. 화면 모델은 repository를 주입받고 파일명이나 직렬화 방식에 의존하지 않는다.
 
 새 저장 파일이 없을 때만 `LegacyAIHistoryReader`가 `session-metadata.json` + `cards/{UUID}.json`, 더 오래된 `ai-chat-history.json`을 읽는다. 다음 성공한 저장에서 새 형식으로 이전하며 원본 파일은 복구용으로 그대로 둔다. 새 파일이 존재하면 항상 그것이 권위 있는 기록이다. 삭제된 대화가 구형 파일에서 다시 나타나도록 fallback하지 않는다. 새 파일 손상, 미래 schema, 누락/중복 카드, 다른 대화 소유의 응답은 오류로 중단하며 빈 기록으로 덮어쓰지 않는다. 과거 원본까지 지우는 영구 삭제/백업 정리는 별도 정책이다.
@@ -23,7 +27,9 @@ AI 프롬프트에 포함할 원고/선택/카드의 범위는 ViewModel에서 �
 
 ## 실행과 검증 경계
 
-전송 시 프로젝트 URL, request ID, conversation ID를 고정한다. 프로젝트 전환과 취소는 콜백을 먼저 무효화한다. 원고 첨부는 선택 사항이며 전송 직전 에디터를 flush한 캐시 내용으로 만든다. Claude 인증은 외부 CLI가 소유한다. ChatGPT는 `Auth/ChatGPTAccountService.swift`가 공식 App Server의 브라우저 OAuth를 시작하고 완료 ID를 검증한다. 토큰 발급·갱신은 공식 런타임, 저장은 macOS Keychain이 담당한다. TextlinkEditor 전용 Application Support/TextlinkEditor/OpenAI와 keyring 설정을 인증·AI 호출 모두에 적용하며, 전역 Codex 계정이나 API 키 환경변수를 재사용하지 않는다. App Server 계약은 `tests/oauth/run.py`, 빈 AI 입력창의 클릭/크기는 `tests/ai_input_regression.py`에서 검증한다. Claude는 safe-mode와 빈 tools를 사용한다. 일반 Codex 대화는 현재 프로젝트를 명시한 workspace-write sandbox를 사용하고, 인라인 편집은 read-only를 유지한다. 사용자 config/rules는 제외한다. 옵션을 지원하지 않는 버전은 명시적 호환성 오류로 처리한다.
+OAuth와 추론은 `LoreCodexEnvironment`의 동일한 계정 저장소를 사용한다. 현재 실제 경로는 제품명 변경 전 인증을 유지하는 `Application Support/Loreweave/OpenAI`다. Codex `exec`에는 keyring·로그인 방식·제공자 설정을 **exec 뒤의 `-c` 인자**로 전달한다. CLI 0.145.0에서 최상위 `-c`만 사용하면 계정 조회는 성공해도 추론에서 인증이 누락될 수 있음을 실제 요청으로 확인했다. 인증 오류를 터미널 신규 로그인 요구로 간주하지 않는다.
+
+전송 시 프로젝트 URL, request ID, conversation ID를 고정한다. 프로젝트 전환과 취소는 콜백을 먼저 무효화한다. 원고 첨부는 선택 사항이며 전송 직전 에디터를 flush한 캐시 내용으로 만든다. Claude 인증은 외부 CLI가 소유한다. ChatGPT는 `Auth/ChatGPTAccountService.swift`가 공식 App Server의 브라우저 OAuth를 시작하고 완료 ID를 검증한다. 토큰 발급·갱신은 공식 런타임, 저장은 macOS Keychain이 담당한다. TextlinkEditor 전용 Application Support/TextlinkEditor/OpenAI와 keyring 설정을 인증·AI 호출 모두에 적용하며, 전역 Codex 계정이나 API 키 환경변수를 재사용하지 않는다. App Server 계약은 `tests/oauth/run.py`, 빈 AI 입력창의 클릭/크기는 `tests/ai_input_regression.py`에서 검증한다. Claude는 safe-mode를 사용하며 일반 채팅·협업은 읽기 도구, 인라인은 빈 tools로 실행한다. Codex 일반 채팅·협업·인라인 모두 read-only sandbox를 사용한다. 사용자 config/rules는 제외한다. 옵션을 지원하지 않는 버전은 명시적 호환성 오류로 처리한다.
 
 `tests/ai/run.sh`는 실제 서비스 대신 임시 fixture 실행 파일로 UTF-8/JSONL, 종료·인증 오류, 프로세스 그룹 취소, 프로젝트 귀속 및 대화 저장을 검증한다. 실제 CLI 로그인·서비스 응답·권한 적용은 별도 검증이다. 외부 CLI 계약 기준은 [Claude headless](https://code.claude.com/docs/en/headless), [Claude flags](https://code.claude.com/docs/en/cli-reference), [Codex non-interactive](https://developers.openai.com/codex/noninteractive/), [Codex CLI reference](https://developers.openai.com/codex/cli/reference/)다.
 
@@ -33,7 +39,15 @@ AI 프롬프트에 포함할 원고/선택/카드의 범위는 ViewModel에서 �
 
 `Context/AIContextSelection.swift`는 프로젝트별 파일·고정 선택문·공개 시점이 허용된 설정 자료를 조립한다. 수정된 열린 원고는 초안, 그 외에는 디스크를 읽는다. 명시적 참조는 256 KiB, 최종 요청은 1 MB 제한이다. 토큰 수 추정치가 아니다. 요청별 `ai-context/{assistantID}.json`에는 실제 최종 프롬프트와 출처를 보관한다.
 
-`Revision/ManuscriptRevision.swift`는 일반 Codex 실행 전 열린 초안을 충돌 검사 후 저장하고 프로젝트 원고(md/txt/markdown)의 기준본을 ai-revisions에 남긴다. 총 64 MiB를 넘거나 읽기/저장에 실패하면 실행하지 않는다. 실행 후 성공·실패·취소 모두 실제 디스크 변경 전후를 기록한다. 비교 화면은 파일 생성·삭제를 포함한 저장 결과 조회이며 AI 답변 문장을 원고로 적용하지 않는다. 실행 중 수동/외부 변경도 기록에 포함될 수 있다. 완료 알림은 활성 편집기의 외부 변경 검사를 즉시 실행하고, 수정 중인 초안과 충돌하면 덮어쓰지 않는다. 비활성 탭은 다시 열 때 디스크를 읽는다. 인라인 편집은 기존 기준본 검증과 네이티브 Undo 경로를 유지한다. 대화 삭제·전송 준비 실패는 연결된 문맥과 기준본·수정 기록도 정리한다.
+`Revision/ManuscriptRevision.swift`는 일반 실행 전 열린 초안을 충돌 검사 후 저장하고 프로젝트 원고(md/txt/markdown)의 기준본을 ai-revisions에 남긴다. 총 64 MiB를 넘거나 읽기/저장에 실패하면 실행하지 않는다. `AIWorkspaceProposalExecutor`는 일반 채팅도 협업 엔진에 전달한다. CLI는 읽기 전용 사본에서 JSON 수정안만 반환하고 실제 문서는 앱이 적용한다. 비교 화면에는 해당 작업이 커밋한 변경만 기록한다. 완료 알림은 활성 편집기의 외부 변경 검사를 실행하며 수정 중인 초안과 IME 조합은 덮어쓰지 않는다. 인라인 편집은 기존 기준본 검증과 네이티브 Undo 경로를 유지한다.
+
+## 문서 중심 협업
+
+`Collaboration/CollaborationCoordinator`가 명시적 문서 의견, 선택한 변경 묶음, 선택적 Git 인덱스를 한 큐로 접수한다. 활성화 시 현재 파일을 기준본으로 등록한다. 저장 이벤트는 목록·설정 색인만 갱신하며 추론을 호출하지 않는다. Git은 프로젝트 루트와 저장소 루트가 같을 때만 읽고, 3초간 동일한 스테이지 내용을 접수한다. 작업 파일과 다르면 자동 덮어쓰기하지 않는다. 스테이징·커밋·저장소 생성은 하지 않는다.
+
+`CollaborationEngine`은 최신 문서와 근거가 연결된 설정 색인·사용자 결정을 격리 사본에 전달한다. 질문에 의존하지 않는 수정만 적용하고 답변이 필요한 부분은 대기한다. 설정 사실은 `WritingLoreEntry`의 선택 필드로 원문 위치·인용·버전·상태·작품 시간·공개 장면·인지 인물과 연결한다. 원문 없는 독립 설정 본문을 복제하지 않는다. 출처가 바뀌면 색인을 갱신하거나 대체됨으로 표시한다. 서사 해석의 정확성은 모델 판단이며 앱의 보증이 아니다.
+
+`CollaborationApplier`만 실제 텍스트를 수정한다. 경로·보호 파일·전체 읽기 기준본·열린 초안·IME를 검증하고, 다중 파일 변경 전 `.{프로젝트명}.weavedata/collaboration`에 복구 저널을 저장한다. 중간 종료는 재진입 시 복구하며 후속 사용자 변경이 있으면 중단한다. 되돌리기도 같은 충돌 검사를 통과해야 한다. 작업 큐·설정 버전·기준본은 `state.json`, 변경 전후는 트랜잭션별 저널에 저장한다. 이미지·숨김 경로·심볼릭 링크·앱 데이터·Git 관리 파일은 사본과 수정 대상에서 제외한다. 패널을 닫아도 작업은 유지하며 프로젝트 전환은 취소한다. 협업 메타데이터와 일반 대화 기록의 생명주기는 별도다.
 
 인라인 편집(`Views/MainEditor/AIAssistant/Inline/InlineAIChatView.swift`)은 전송 직후 닫히는 단일 지시 입력창이다. 선택한 범위가 있으면 치환하고 공백 선택 또는 커서만 있으면 해당 위치에 삽입한다. 문맥은 화면에 표시하지 않는다. `InlineEditRequest`가 JSON replacement 응답을 요구하며 앱만 기준본 비교·버전 기록·네이티브 Undo 경로를 통해 수정한다. 전송 전후 원고나 활성 문서가 바뀌면 덮어쓰지 않는다. 일반 답변이나 잘못된 JSON은 실패로 기록한다.
 
@@ -56,7 +70,7 @@ AI 프롬프트에 포함할 원고/선택/카드의 범위는 ViewModel에서 �
 - `Preferences/AIModelPreferences`: 제공자·카테고리별 마지막 모델/추론 선택, 구형 설정 이전, 모델 capability에 맞는 옵션 결정. UI는 같은 observable 인스턴스를 읽는다. 새 범주는 `AIConversationCategory`에 추가하며 일반 채팅의 기존 설정 키를 유지한다.
 - `Requests/AIRequestPreparer`: 원고 기준본 검증, 문맥/프롬프트 조립, 요청 artifact 준비. 화면의 메시지·초안·선택 대화는 수정하지 않는다. 준비 실패와 기록 커밋 실패 시 호출자가 해당 요청 artifact를 정리한다.
 - `Requests/AIRequestExecuting`: 실행·스트리밍·취소 계약. 다른 실행기나 테스트 대역은 화면 모델 수정 없이 주입할 수 있다.
-- `Requests/AIWorkspaceTrackingExecutor`: 실행기를 감싸는 decorator. 성공·실패·취소 모두 캡처한 프로젝트의 실제 파일 변경을 기록한다. 삭제된 요청의 artifact는 재생성하지 않는다. AI 응답이나 원고를 직접 수정하지 않는다.
+- `Requests/AIWorkspaceProposalExecutor`: 일반 대화를 공통 협업 실행·적용 경로에 연결하고 해당 작업의 변경 비교를 기존 대화 기록에 연결한다. 기존 TrackingExecutor는 이전 계약 회귀용이며 실제 채팅 실행에는 사용하지 않는다.
 - `CLI/CLIProcessManager`: 제공자 인자 구성과 단일 요청 소유. `CLIRequestRunner`는 POSIX 프로세스·취소·파이프 I/O, `CLIJSONStream`은 UTF-8 JSONL framing과 제공자 이벤트 해석을 담당한다.
 - `Chat/AIHistoryModels`와 `AIHistorySnapshot`: 저장 레코드, 메시지-대화 관계 및 인덱스 무결성. 파일 I/O는 repository, 구형 읽기만 legacy reader에 둔다.
 - `AIAssistantViewModel`: 화면 상태, 연결 상태, 전송 시작/완료 조율과 프로젝트 전환 시 콜백 무효화. UI 변경과 저장 순서의 소유자는 이 객체다. 기존 sidebar/inline 분리, 단일 실행, 네이티브 원고 적용·Undo 계약은 유지한다.

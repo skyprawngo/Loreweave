@@ -4,7 +4,42 @@ import AppKit
 /// and the line-number accessory are app-specific. TextKit 2 owns viewport layout.
 final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, EditorToolTarget {
     lazy var toolBridge = EditorToolBridge(editor: self)
+    lazy var scrollCoordinator = EditorScrollCoordinator(editor: self)
     private var displayStyle: EditorDisplayStyle?
+    private var rendersMarkdown = false
+    private var applyingMarkdown = false
+    private var markdownRenderKey: String?
+
+    func setMarkdownRendering(_ enabled: Bool) {
+        guard rendersMarkdown != enabled else { return }
+        commitComposition()
+        rendersMarkdown = enabled
+        refreshMarkdownRendering(reset: true)
+    }
+
+    func refreshMarkdownRendering(reset: Bool = false) {
+        guard (rendersMarkdown || reset), !applyingMarkdown, !hasMarkedText(),
+              let storage = textStorage, let style = displayStyle else { return }
+        let paragraph = (storage.string as NSString).paragraphRange(for: NSRange(location: min(selectedRange().location, storage.length), length: 0))
+        let key = "\(textEditGeneration)|\(paragraph.location)|\(style.key)|\(rendersMarkdown)"
+        guard reset || markdownRenderKey != key else { return }
+        markdownRenderKey = key
+        applyingMarkdown = true
+        defer { applyingMarkdown = false }
+        let anchor = scrollCoordinator.capture(for: .markdownRendering)
+        storage.beginEditing()
+        let whole = NSRange(location: 0, length: storage.length)
+        storage.addAttributes(style.changedAttributes(from: nil), range: whole)
+        storage.removeAttribute(.strikethroughStyle, range: whole)
+        storage.removeAttribute(.underlineStyle, range: whole)
+        if rendersMarkdown {
+            MarkdownSourceStyling.apply(to: storage, selection: selectedRange(),
+                font: NSFont(name: style.fontName, size: style.fontSize) ?? .systemFont(ofSize: style.fontSize))
+        }
+        storage.endEditing()
+        typingAttributes = style.changedAttributes(from: nil)
+        if let anchor { scrollCoordinator.restore(anchor) }
+    }
     private(set) var inlinePanel: NSView?
     private var inlineAnchor = 0
     private let inlineHeight: CGFloat = 100
@@ -140,8 +175,9 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
         breakUndoCoalescing()
     }
     func load(_ value: String, prepared: PreparedManuscript? = nil) {
+        markdownRenderKey = nil
         toolBridge.cancelPending()
-        pendingCursorAnchor = nil
+        scrollCoordinator.cancel()
         displayStyle = nil
         closeInlinePanel()
         commitComposition()
@@ -186,15 +222,8 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
         }
         let selection = selectedRange()
         let style = displayStyle
-        var anchor: CursorViewportAnchor?
-        if let scroll = enclosingScrollView {
-            let point = NSPoint(x: textContainerOrigin.x + (textContainer?.lineFragmentPadding ?? 0),
-                                y: scroll.contentView.bounds.minY + 1)
-            let offset = min(characterIndexForInsertion(at: point), oldLength)
-            if let rect = lineRect(at: offset) {
-                anchor = CursorViewportAnchor(offset: mapped(offset),
-                    screenY: rect.minY + textContainerOrigin.y - scroll.contentView.bounds.minY)
-            }
+        let anchor = scrollCoordinator.capture(for: .externalTextChange).map {
+            CursorViewportAnchor(offset: mapped($0.offset), screenY: $0.screenY)
         }
         if undoable {
             let replacement = (value as NSString).substring(with: NSRange(location: prefix, length: newLength - prefix - suffix))
@@ -206,7 +235,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
         let start = mapped(min(selection.location, oldLength))
         let end = mapped(min(NSMaxRange(selection), oldLength))
         setSelectedRange(NSRange(location: start, length: max(0, end - start)))
-        if let anchor { restoreCursorViewportAnchor(anchor) }
+        if let anchor { scrollCoordinator.restore(anchor) }
         needsLayout = true
         needsDisplay = true
     }
@@ -246,7 +275,11 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
                                                     "underline": .underline, "strikethrough": .strikethrough]
         if let format = formats[kind] { applyCommand(EditorCommand(.format(format))) }
     }
-    func toolAssistant(_ titleKey: String) { applyCommand(EditorCommand(.assistantDraft(L10n.get(titleKey)))) }
+    func toolAssistant(_ titleKey: String) {
+        if titleKey == "collaboration.commentSelection" {
+            NotificationCenter.default.post(name: .init("collaborationCommentRequested"), object: nil)
+        } else { applyCommand(EditorCommand(.assistantDraft(L10n.get(titleKey)))) }
+    }
     func toolPresent(_ control: String) { onToolPresentation?(control) }
     func toolAttachSelection() {
         guard selectedRange().length > 0 else { return }
@@ -301,7 +334,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
                 ? String(selected.dropFirst(markers.0.count).dropLast(markers.1.count)) : markers.0 + selected + markers.1
             replace(selectedRange(), with: result, selectReplacement: true)
         }
-        scrollRangeToVisible(selectedRange())
+        scrollCoordinator.revealSelection()
     }
     private func find(_ query: String, forward: Bool) {
         guard !query.isEmpty else { return }
@@ -425,7 +458,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
                     let selection = state.selection.range.normalized
                     let start = state.document.utf16Offset(from: selection.start)
                     setSelectedRange(NSRange(location: start, length: state.document.utf16Offset(from: selection.end) - start))
-                    scrollRangeToVisible(selectedRange())
+                    scrollCoordinator.revealSelection()
                 }
                 return
             default: break
@@ -445,6 +478,9 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
         let attach = NSMenuItem(title: L10n.get("ai.context.attachSelection"), action: #selector(attachSelectionToAI(_:)), keyEquivalent: "")
         attach.target = self
         menu.addItem(attach)
+        let comment = NSMenuItem(title: L10n.get("collaboration.commentSelection"), action: #selector(commentSelection(_:)), keyEquivalent: "")
+        comment.target = self
+        menu.addItem(comment)
         let inline = NSMenuItem(title: L10n.get("ai.inline.open"), action: #selector(openInlineAI(_:)), keyEquivalent: "")
         inline.target = self
         menu.addItem(inline)
@@ -472,7 +508,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
         inlinePanel = panel
         addSubview(panel)
         invalidateInlineLayout()
-        scrollToVisible(panel.frame)
+        scrollCoordinator.reveal(panel.frame)
     }
 
     func closeInlinePanel() {
@@ -502,72 +538,9 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
         needsDisplay = true
     }
 
-    struct ViewportAnchor {
-        let location: any NSTextLocation
-        let offset: CGFloat
-    }
-    func captureViewportAnchor() -> ViewportAnchor? {
-        guard let manager = textLayoutManager,
-              let viewport = manager.textViewportLayoutController.viewportRange,
-              let fragment = manager.textLayoutFragment(for: viewport.location),
-              fragment.state == .layoutAvailable,
-              let scroll = enclosingScrollView else { return nil }
-        return ViewportAnchor(location: viewport.location,
-                              offset: scroll.contentView.bounds.minY - fragment.layoutFragmentFrame.minY - textContainerOrigin.y)
-    }
-    func restoreViewportAnchor(_ anchor: ViewportAnchor) {
-        guard let manager = textLayoutManager, let scroll = enclosingScrollView else { return }
-        let y = manager.textViewportLayoutController.relocateViewport(to: anchor.location)
-        scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: max(0, y + textContainerOrigin.y + anchor.offset)))
-        scroll.reflectScrolledClipView(scroll.contentView)
-    }
-
-    struct CursorViewportAnchor {
-        let offset: Int
-        let screenY: CGFloat
-    }
-
-    /// Presentation changes follow the insertion line, not the manually scrolled viewport.
-    /// Inspect only existing visible layout before deciding whether to relocate offscreen text.
-    func captureCursorViewportAnchor() -> CursorViewportAnchor? {
-        if let pendingCursorAnchor, pendingCursorAnchor.offset == selectedRange().location {
-            return pendingCursorAnchor
-        }
-        guard let scroll = enclosingScrollView, let manager = textLayoutManager,
-              let location = textLocation(at: selectedRange().location) else { return nil }
-        let offset = selectedRange().location
-        if let viewport = manager.textViewportLayoutController.viewportRange,
-           location.compare(viewport.location) != .orderedAscending,
-           location.compare(viewport.endLocation) != .orderedDescending,
-           let rect = lineRect(at: offset) {
-            let y = rect.minY + textContainerOrigin.y - scroll.contentView.bounds.minY
-            if y >= 0, y + rect.height <= scroll.contentSize.height {
-                return CursorViewportAnchor(offset: offset, screenY: y)
-            }
-        }
-        let anchor = CursorViewportAnchor(offset: offset, screenY: 0)
-        // Move before changing attributes, in the same synchronous presentation transaction.
-        restoreCursorViewportAnchor(anchor)
-        return anchor
-    }
-
-    private var pendingCursorAnchor: CursorViewportAnchor?
-
-    func restoreCursorViewportAnchor(_ anchor: CursorViewportAnchor, afterLayout: Bool = false) {
-        if !afterLayout { pendingCursorAnchor = anchor }
-        guard let manager = textLayoutManager, let scroll = enclosingScrollView,
-              let location = textLocation(at: anchor.offset) else { return }
-        let controller = manager.textViewportLayoutController
-        let y = controller.relocateViewport(to: location)
-        scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX,
-            y: max(0, y + textContainerOrigin.y - anchor.screenY)))
-        controller.layoutViewport()
-        if let rect = lineRect(at: anchor.offset) {
-            scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX,
-                y: max(0, rect.minY + textContainerOrigin.y - anchor.screenY)))
-        }
-        scroll.reflectScrolledClipView(scroll.contentView)
-    }
+    typealias CursorViewportAnchor = EditorScrollCoordinator.Anchor
+    func captureCursorViewportAnchor() -> CursorViewportAnchor? { scrollCoordinator.capture(.followCursor) }
+    func restoreCursorViewportAnchor(_ anchor: CursorViewportAnchor) { scrollCoordinator.restore(anchor) }
 
     func applyDisplayStyle(_ style: EditorDisplayStyle) {
         guard style.key != styleKey else { displayStyle = style; return }
@@ -582,6 +555,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
             if let paragraph = delta[.paragraphStyle] as? NSParagraphStyle { self.defaultParagraphStyle = paragraph }
             self.displayStyle = style
             self.styleKey = style.key
+            self.refreshMarkdownRendering()
             return true
         }
     }
@@ -589,18 +563,18 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     // Window resizing preserves the viewport; presentation tools preserve the cursor line.
     private var restoringResizeAnchor = false
     override func setFrameSize(_ newSize: NSSize) {
-        let anchor = !restoringResizeAnchor && newSize.width != frame.width ? captureViewportAnchor() : nil
+        let anchor = !restoringResizeAnchor && newSize.width != frame.width ? scrollCoordinator.captureResizeAnchor() : nil
         guard let anchor else { super.setFrameSize(newSize); return }
         restoringResizeAnchor = true
         defer { restoringResizeAnchor = false }
         super.setFrameSize(newSize)
-        restoreViewportAnchor(anchor)
+        scrollCoordinator.restoreResizeAnchor(anchor)
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
             toolBridge.cancelPending()
-            pendingCursorAnchor = nil
+            scrollCoordinator.cancel()
         }
         super.viewWillMove(toWindow: newWindow)
     }
@@ -608,10 +582,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     override func layout() {
         defer { toolBridge.viewportDidLayout() }
         super.layout()
-        if let anchor = pendingCursorAnchor {
-            pendingCursorAnchor = nil
-            restoreCursorViewportAnchor(anchor, afterLayout: true)
-        }
+        scrollCoordinator.layoutDidFinish()
         enclosingScrollView?.verticalRulerView?.needsDisplay = true
         guard let panel = inlinePanel,
               let location = textLocation(at: inlineAnchor),
@@ -664,6 +635,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     override func didChangeText() {
         textEditGeneration &+= 1
         super.didChangeText()
+        refreshMarkdownRendering()
         if inlinePanel != nil {
             inlineAnchor = min(max(0, inlineAnchor), (textStorage?.length ?? 0))
             invalidateInlineLayout()
@@ -671,9 +643,11 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     }
 
     @objc private func attachSelectionToAI(_ sender: Any?) { EditorToolRegistry.perform("ai.attachSelection", on: self) }
+    @objc private func commentSelection(_ sender: Any?) { EditorToolRegistry.perform("ai.collaborationComment", on: self) }
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(openInlineAI(_:)) { return isEditable }
         if menuItem.action == #selector(attachSelectionToAI(_:)) { return selectedRange().length > 0 }
+        if menuItem.action == #selector(commentSelection(_:)) { return selectedRange().length > 0 && !hasMarkedText() }
         if menuItem.action == #selector(undo(_:)) { return isEditable && documentUndoManager.canUndo }
         if menuItem.action == #selector(redo(_:)) { return isEditable && documentUndoManager.canRedo }
         if menuItem.action == #selector(formatSelection(_:)) { return isEditable && selectedRange().length > 0 }
@@ -738,4 +712,46 @@ final class NativeManuscriptHost: NSScrollView {
         rulersVisible = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Inline presentation changes attributes only; source offsets, newlines and Undo stay native.
+private enum MarkdownSourceStyling {
+    private static let code = try! NSRegularExpression(pattern: "`+[^`]*`+")
+    private static let patterns: [(NSRegularExpression, NSFontTraitMask, NSAttributedString.Key?)] = [
+        (#"(?<![\\*])\*\*\*(?=\S)(.+?)(?<=\S)\*\*\*"#, [.boldFontMask, .italicFontMask], nil),
+        (#"(?<![\\*])\*\*(?=\S)(.+?)(?<=\S)\*\*"#, .boldFontMask, nil),
+        (#"(?<![\\*])\*(?=\S)([^*\n]+?)(?<=\S)\*"#, .italicFontMask, nil),
+        (#"(?<![\\\w])__(?=\S)(.+?)(?<=\S)__"#, .boldFontMask, nil),
+        (#"(?<![\\\w])_(?=\S)([^_\n]+?)(?<=\S)_"#, .italicFontMask, nil),
+        (#"(?<!\\)~~(?=\S)(.+?)(?<=\S)~~"#, [], .strikethroughStyle),
+        (#"(?i)(?<!\\)<u>(.+?)</u>"#, [], .underlineStyle)
+    ].map { (try! NSRegularExpression(pattern: $0.0), $0.1, $0.2) }
+
+    static func apply(to storage: NSTextStorage, selection: NSRange, font: NSFont) {
+        let source = storage.string as NSString
+        let all = NSRange(location: 0, length: source.length)
+        let active = source.paragraphRange(for: NSRange(location: min(selection.location, source.length), length: 0))
+        let protected = code.matches(in: storage.string, range: all).map(\.range)
+        var consumed: [NSRange] = []
+        for (pattern, traits, decoration) in patterns {
+            for match in pattern.matches(in: storage.string, range: all) {
+                guard !protected.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
+                      !consumed.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else { continue }
+                let content = match.range(at: 1)
+                consumed.append(match.range)
+                storage.addAttribute(.font, value: NSFontManager.shared.convert(font, toHaveTrait: traits), range: content)
+                if let decoration { storage.addAttribute(decoration, value: NSUnderlineStyle.single.rawValue, range: content) }
+                let markers = [NSRange(location: match.range.location, length: content.location - match.range.location),
+                    NSRange(location: NSMaxRange(content), length: NSMaxRange(match.range) - NSMaxRange(content))]
+                for marker in markers {
+                    if NSIntersectionRange(active, match.range).length > 0 {
+                        storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: marker)
+                    } else {
+                        storage.addAttributes([.foregroundColor: NSColor.clear,
+                            .font: NSFont.systemFont(ofSize: 0.01), .kern: 0], range: marker)
+                    }
+                }
+            }
+        }
+    }
 }

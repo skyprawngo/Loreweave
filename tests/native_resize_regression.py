@@ -10,6 +10,8 @@ views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
+sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
 sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', views / 'NativeManuscriptView.swift']
 prefix = (root / 'tests/editor_binding_regression.py').read_text().split("harness = r'''", 1)[1].split('final class Box', 1)[0]
 harness = r'''

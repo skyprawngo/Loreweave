@@ -147,7 +147,8 @@ struct ProjectBackupButton: View {
             panel.title = L10n.get("versions.backupTitle")
             panel.message = L10n.get("versions.backupDescription")
             panel.directoryURL = projectURL.deletingLastPathComponent()
-            panel.nameFieldStringValue = projectURL.deletingPathExtension().lastPathComponent + "-" + L10n.get("versions.backupSuffix") + ".weaveproj"
+            let name = projectURL.lastPathComponent
+            panel.nameFieldStringValue = name + "-" + L10n.get("versions.backupSuffix")
             panel.canCreateDirectories = true
             panel.begin { response in
                 guard response == .OK, let destination = panel.url else { return }

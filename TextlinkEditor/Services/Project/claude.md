@@ -1,9 +1,9 @@
 # 프로젝트 형식과 접근 수명
 
-`ProjectManager.swift`와 `Models/Project.swift`가 `.weaveproj` 폴더 및 메타데이터를 다룬다.
+`ProjectManager.swift`와 `Models/Project.swift`가 일반 프로젝트 폴더 및 메타데이터를 다룬다. 생성 시 확장자를 붙이지 않으며 입력한 이름 그대로 폴더를 만든다. 열기 패널은 확장자 대신 내부 project.json을 읽어 프로젝트 여부를 검증한다.
 
 ```text
-MyProject.weaveproj/
+MyProject/
 ├── .MyProject.weavedata/
 │   ├── project.json
 │   ├── editor-settings.json

@@ -153,7 +153,7 @@ struct EditorContainerView: View {
                     fontName: fontName,
                     lineHeightMultiple: lineSpacingOption.lineHeightMultiple,
                     letterSpacing: letterSpacing,
-                    isEditable: loadError == nil && !isLoading && !isMarkdownPreview,
+                    isEditable: loadError == nil && !isLoading,
                     initialCursorPosition: initialCursorPosition,
                     onContentWillChange: { ownerURL, finalText, cursorLine, cursorColumn in
                         // 탭 전환 직전: 이전 파일의 최종 텍스트(조합 확정 후)와 커서 위치를 캐시에 저장
@@ -174,7 +174,8 @@ struct EditorContainerView: View {
                     },
                     openDocumentIDs: Set(tabManager.tabs.map(\.id)),
                     preparedContent: preparedContent,
-                    isSourceVisible: !isMarkdownPreview,
+                    isSourceVisible: true,
+                    rendersMarkdown: isMarkdownPreview,
                     onToolPresentation: { control in
                         if control == "markdownPreview" {
                             tabManager.flushEditor()
@@ -183,18 +184,8 @@ struct EditorContainerView: View {
                         } else { focusMode = false; presentedTool = control }
                     }
                 )
-                .opacity(isMarkdownPreview ? 0 : 1)
-                .allowsHitTesting(!isMarkdownPreview)
-                .accessibilityHidden(isMarkdownPreview)
                 .background(AppColors.textEditorBackground)
                 .clipped()
-                .overlay {
-                    if isMarkdownPreview {
-                        MarkdownPreviewView(source: text, fontName: fontName, fontSize: fontSize,
-                            lineHeightMultiple: lineSpacingOption.lineHeightMultiple, letterSpacing: letterSpacing)
-                            .id(currentDocumentID)
-                    }
-                }
                 .overlay { if isLoading { ProgressView().controlSize(.regular).allowsHitTesting(false) } }
 
                 // 상태바

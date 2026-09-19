@@ -38,6 +38,7 @@ enum EditorToolRegistry {
         tool("display.letterSpacing", "editor.letterSpacing", .view, .presentation) { $0.toolPresent("letterSpacing") },
         tool("ai.inline", "ai.inline.open", .ai, .selection, key: "i", modifiers: [.command]) { $0.toolToggleInline() },
         tool("ai.attachSelection", "ai.context.attachSelection", .ai, .request) { $0.toolAttachSelection() },
+        tool("ai.collaborationComment", "collaboration.commentSelection", .ai, .request) { $0.toolAssistant("collaboration.commentSelection") },
         tool("ai.continueWriting", "ai.continueWriting", .ai, .request, key: "return", modifiers: [.command, .shift]) { $0.toolAssistant("ai.continueWriting") },
         tool("ai.refine", "ai.refineText", .ai, .request, key: "r", modifiers: [.command, .shift]) { $0.toolAssistant("ai.refineText") },
         tool("ai.summarize", "ai.summarize", .ai, .request, key: "u", modifiers: [.command, .shift]) { $0.toolAssistant("ai.summarize") },

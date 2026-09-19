@@ -40,7 +40,7 @@ let rejected = base.appendingPathComponent("Rejected.weaveproj")
 do { try ProjectBackupStore.create(projectURL: project, destinationURL: rejected); fatalError("symlink backed up") } catch {}
 check(!fm.fileExists(atPath: rejected.path), "failed backup publishes no partial folder")
 try fm.removeItem(at: link)
-let backup = base.appendingPathComponent("Backup.weaveproj")
+let backup = base.appendingPathComponent("Backup")
 try ProjectBackupStore.create(projectURL: project, destinationURL: backup)
 try check(String(contentsOf: backup.appendingPathComponent("chapter.md"), encoding: .utf8) == "disk", "backup retains saved manuscript")
 let backupVersions = try VersionHistoryStore.snapshots(projectURL: backup, documentURL: backup.appendingPathComponent("chapter.md"))

@@ -144,61 +144,60 @@ final class FileSystemItem: Identifiable, Hashable {
 
 /// .weaveproj 프로젝트의 표준 섹션 폴더
 enum ProjectSection: String, CaseIterable {
-    case worldbuilding
+    case manuscripts
+    case settings
     case characters
     case plot
-    case storyboard
-    case editor
-    case ideas
+    case scenes
+    case research
 
     /// 로컬라이즈된 폴더 이름
     var localizedFolderName: String {
         switch self {
-        case .worldbuilding: return L10n.get("folder.worldbuilding")
+        case .manuscripts: return L10n.get("folder.manuscripts")
+        case .settings: return L10n.get("folder.settings")
         case .characters: return L10n.get("folder.characters")
         case .plot: return L10n.get("folder.plot")
-        case .storyboard: return L10n.get("folder.storyboard")
-        case .editor: return L10n.get("folder.editor")
-        case .ideas: return L10n.get("folder.ideas")
+        case .scenes: return L10n.get("folder.scenes")
+        case .research: return L10n.get("folder.research")
         }
     }
 
     /// 아이콘 이름 (SF Symbols)
     var iconName: String {
         switch self {
-        case .worldbuilding: return "globe.asia.australia"
+        case .manuscripts: return "doc.text"
+        case .settings: return "globe.asia.australia"
         case .characters: return "person.2"
         case .plot: return "arrow.triangle.branch"
-        case .storyboard: return "rectangle.split.3x3"
-        case .editor: return "doc.text"
-        case .ideas: return "lightbulb"
+        case .scenes: return "rectangle.split.3x3"
+        case .research: return "book"
         }
     }
 
-    /// 모든 언어의 폴더 이름 목록 (기존 프로젝트 인식용)
+    /// 모든 언어의 표준 폴더 이름 목록
     static var allLocalizedNames: [String] {
-        // 모든 언어에서 사용되는 폴더 이름들
         return [
-            // Korean
-            "세계관", "캐릭터", "플롯", "콘티", "에디터", "아이디어",
-            // English
-            "Worldbuilding", "Characters", "Plot", "Storyboard", "Editor", "Ideas",
-            // Japanese
-            "世界観", "キャラクター", "プロット", "コンテ", "エディター", "アイデア"
+            // Korean template
+            "원고", "설정", "인물", "플롯", "장면", "자료",
+            // English template
+            "Manuscripts", "Settings", "Characters", "Plot", "Scenes", "Research",
+            // Japanese template
+            "原稿", "設定", "登場人物", "プロット", "シーン", "資料"
         ]
     }
 
     /// 폴더 이름 → 섹션 타입 매핑 (O(1) 룩업)
     private static let folderNameMapping: [String: ProjectSection] = [
-        // Korean
-        "세계관": .worldbuilding, "캐릭터": .characters, "플롯": .plot,
-        "콘티": .storyboard, "에디터": .editor, "아이디어": .ideas,
-        // English (lowercase)
-        "worldbuilding": .worldbuilding, "characters": .characters, "plot": .plot,
-        "storyboard": .storyboard, "editor": .editor, "ideas": .ideas,
-        // Japanese
-        "世界観": .worldbuilding, "キャラクター": .characters, "プロット": .plot,
-        "コンテ": .storyboard, "エディター": .editor, "アイデア": .ideas
+        // Korean template
+        "원고": .manuscripts, "설정": .settings, "인물": .characters, "플롯": .plot,
+        "장면": .scenes, "자료": .research,
+        // English template (case-insensitive lookup)
+        "manuscripts": .manuscripts, "settings": .settings, "characters": .characters,
+        "plot": .plot, "scenes": .scenes, "research": .research,
+        // Japanese template
+        "原稿": .manuscripts, "設定": .settings, "登場人物": .characters, "プロット": .plot,
+        "シーン": .scenes, "資料": .research
     ]
 
     /// 폴더 이름으로부터 섹션 타입 추론 (모든 언어 지원)

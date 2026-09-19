@@ -461,6 +461,31 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
     }
 
     /// Give the workspace agent the same text the user sees; never ignore a failed save.
+    func validateAIApplication(project: URL) throws {
+        var composing = false
+        let check: (Bool) -> Void = { composing = composing || $0 }
+        NotificationCenter.default.post(name: .editorWillPerformFileOperation, object: nil,
+                                       userInfo: ["checkComposition": check])
+        guard !composing else { throw NSError(domain: "AIWorkspaceEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.get("storage.conflict")]) }
+        flushEditor()
+        let root = project.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        guard !tabs.contains(where: {
+            $0.url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root) && isModified(url: $0.url)
+        }) else { throw NSError(domain: "AIWorkspaceEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.get("storage.conflict")]) }
+    }
+
+    func collaborationDrafts(project: URL) -> [String: String] {
+        flushEditor()
+        let prefix = project.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        var result: [String: String] = [:]
+        for tab in tabs {
+            let path = tab.url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard path.hasPrefix(prefix), isModified(url: tab.url), let text = getCachedContent(for: tab.url) else { continue }
+            result[String(path.dropFirst(prefix.count))] = text
+        }
+        return result
+    }
+
     func prepareForAIWorkspaceEdit(project: URL) throws {
         flushEditor()
         let root = project.resolvingSymlinksInPath().standardizedFileURL.path + "/"

@@ -162,13 +162,12 @@ enum VersionHistoryStore {
 }
 
 enum ProjectBackupStore {
-    /// Destination is a new .weaveproj folder outside the source; publish only a complete copy.
+    /// Destination is a new folder outside the source; publish only a complete copy.
     static func create(projectURL: URL, destinationURL: URL) throws {
         let manager = FileManager.default
         let source = projectURL.standardizedFileURL.resolvingSymlinksInPath()
         let target = destinationURL.standardizedFileURL.resolvingSymlinksInPath()
-        guard target != source, !target.path.hasPrefix(source.path + "/"),
-              target.pathExtension == "weaveproj" else { throw VersionHistoryStore.Failure.outsideProject }
+        guard target != source, !target.path.hasPrefix(source.path + "/") else { throw VersionHistoryStore.Failure.outsideProject }
         guard !manager.fileExists(atPath: target.path) else { throw CocoaError(.fileWriteFileExists) }
         let staging = target.deletingLastPathComponent().appendingPathComponent(".backup-" + UUID().uuidString)
         defer { try? manager.removeItem(at: staging) }

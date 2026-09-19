@@ -18,10 +18,22 @@ struct AIAssistantContainerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            Picker(L10n.get("collaboration.title"), selection: Binding(
+                get: { viewModel.collaboration.showingPanel }, set: { viewModel.collaboration.showingPanel = $0 })) {
+                Text(L10n.get("ai.inline.chatHistory")).tag(false)
+                Text(L10n.get("collaboration.title")).tag(true)
+            }.pickerStyle(.segmented).padding(10)
+            if !viewModel.collaboration.showingPanel, let notice = viewModel.collaboration.notification {
+                Button { viewModel.collaboration.showingPanel = true } label: {
+                    Label(notice, systemImage: "person.2.wave.2").font(.caption)
+                }.buttonStyle(.borderless).padding(.horizontal, 10)
+            }
             if let error = viewModel.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled).padding(12)
             }
-            if aiAssistantEnabled, case .connected(let type) = viewModel.connectionState {
+            if viewModel.collaboration.showingPanel {
+                CollaborationView(coordinator: viewModel.collaboration)
+            } else if aiAssistantEnabled, case .connected(let type) = viewModel.connectionState {
                 chatView(for: type)
             } else {
                 ContentUnavailableView {
@@ -36,7 +48,7 @@ struct AIAssistantContainerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { viewModel.setProject(projectFolderURL) }
-        .onDisappear { viewModel.cancelSend(); viewModel.chatGPTAccount.cancelLogin() }
+        .onDisappear { viewModel.chatGPTAccount.cancelLogin() }
         .onChange(of: projectFolderURL) { _, newValue in viewModel.setProject(newValue) }
         .onChange(of: viewModel.chatGPTAccount.account) { _, account in
             guard viewModel.selectedCLIType == .chatgpt else { return }

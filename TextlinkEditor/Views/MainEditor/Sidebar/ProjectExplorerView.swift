@@ -87,6 +87,17 @@ struct ProjectExplorerView: View {
                     .padding(.vertical, 4)
                 }
                 .frame(maxHeight: .infinity)
+                // Rows accept drops only when the pointer is over a folder. A drop over
+                // any other part of the explorer belongs to the project root.
+                .dropDestination(for: String.self) { droppedItems, _ in
+                    guard let rootItem = fileSystemManager.projectRoot,
+                          let urlString = droppedItems.first,
+                          let sourceURL = URL(string: urlString),
+                          let sourceItem = itemByURL[sourceURL] else {
+                        return false
+                    }
+                    return handleMoveItem(sourceItem, to: rootItem)
+                }
             }
             .contextMenu { rootContextMenu }
             .frame(maxHeight: .infinity)
@@ -451,7 +462,14 @@ struct ProjectExplorerView: View {
 
     // MARK: - Drag and Drop
 
-    private func handleMoveItem(_ sourceItem: FileSystemItem, to destinationFolder: FileSystemItem) {
+    @discardableResult
+    private func handleMoveItem(_ sourceItem: FileSystemItem, to destinationFolder: FileSystemItem) -> Bool {
+        // A same-directory drop has no filesystem work to perform. Reject it before
+        // collision handling so the item's own name never produces a rename alert.
+        guard !WorkspaceFileIdentity.same(sourceItem.url.deletingLastPathComponent(), destinationFolder.url) else {
+            return false
+        }
+
         if !sourceItem.isDirectory && tabManager.isModified(url: sourceItem.url) {
             fileSystemManager.showModifiedFileMoveDialog(fileName: sourceItem.name) { result in
                 switch result {
@@ -471,6 +489,7 @@ struct ProjectExplorerView: View {
         } else {
             checkNameConflictAndMove(sourceItem, to: destinationFolder)
         }
+        return true
     }
 
     private func checkNameConflictAndMove(_ sourceItem: FileSystemItem, to destinationFolder: FileSystemItem) {
@@ -510,12 +529,12 @@ struct ProjectExplorerView: View {
     root.isExpanded = true
 
     let sections = [
-        ("세계관", true, 3),
-        ("캐릭터", true, 5),
+        ("원고", true, 3),
+        ("설정", true, 5),
         ("플롯", true, 2),
-        ("콘티", true, 0),
-        ("에디터", true, 1),
-        ("아이디어", true, 4)
+        ("인물", true, 0),
+        ("장면", true, 1),
+        ("자료", true, 4)
     ]
 
     var sectionItems: [FileSystemItem] = []

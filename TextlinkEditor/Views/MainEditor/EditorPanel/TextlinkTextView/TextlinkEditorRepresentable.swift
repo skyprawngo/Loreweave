@@ -33,10 +33,12 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
     var editCommand: EditorCommand? = nil
     var contentRevision: UUID? = nil
     var isDocumentActive: ((UUID?, URL?, UUID?) -> Bool)? = nil
+    var viewportStore: EditorViewportStore = .shared
 
     var openDocumentIDs: Set<UUID>? = nil
     var preparedContent: PreparedManuscript? = nil
     var isSourceVisible = true
+    var rendersMarkdown = false
     var onToolPresentation: ((String) -> Void)? = nil
 
     func makeNSView(context: Context) -> NativeManuscriptHost {
@@ -47,6 +49,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         configure(native)
         let host = NativeManuscriptHost(textView: native)
         coordinator.host = host
+        coordinator.observeScrolling()
         coordinator.documentID = documentID
         coordinator.documentURL = documentURL
         coordinator.contentRevision = contentRevision
@@ -60,6 +63,10 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             forName: Notification.Name("editorWillPerformFileOperation"), object: nil, queue: .main
         ) { [weak coordinator] notification in
             guard let coordinator else { return }
+            if let check = notification.userInfo?["checkComposition"] as? (Bool) -> Void {
+                check(coordinator.host?.textView.hasMarkedText() ?? false)
+                return
+            }
             coordinator.flush()
             guard coordinator.parent.isDocumentActive?(coordinator.documentID, coordinator.documentURL, coordinator.contentRevision) ?? true,
                   let native = coordinator.host?.textView, native.isEditable else { return }
@@ -72,8 +79,14 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
                 coordinator.flush()
             }
         }
+        coordinator.restoreViewport()
         coordinator.focusAndPublish()
         return host
+    }
+
+    static func dismantleNSView(_ host: NativeManuscriptHost, coordinator: Coordinator) {
+        coordinator.saveViewport()
+        coordinator.stopObservingScrolling()
     }
 
     func updateNSView(_ host: NativeManuscriptHost, context: Context) {
@@ -120,24 +133,25 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         coordinator.contentRevision = contentRevision
         coordinator.presentedText = text
         configure(host.textView)
+        if changed || finishedLoading { coordinator.restoreViewport() }
         host.textView.modifiedLines = externallyModifiedLines
         host.verticalRulerView?.needsDisplay = true
         if let command = editCommand, coordinator.lastCommandID != command.id {
             coordinator.lastCommandID = command.id
-            coordinator.isUpdating = false
-            host.textView.execute(command)
-            coordinator.isUpdating = true
+            coordinator.scheduleCommand(command)
         }
         if changed || finishedLoading { coordinator.focusAndPublish() }
-        else if becameVisible { host.window?.makeFirstResponder(host.textView) }
+        else if becameVisible { coordinator.focusAndPublish(scrollToSelection: false) }
     }
 
     private func configure(_ view: NativeManuscriptTextView) {
+        view.setMarkdownRendering(rendersMarkdown)
         view.isEditable = isEditable
         view.isSelectable = true
         view.onToolPresentation = onToolPresentation
         view.applyDisplayStyle(EditorDisplayStyle(fontName: fontName, fontSize: fontSize,
                                                  lineHeightMultiple: lineHeightMultiple, letterSpacing: letterSpacing))
+        view.refreshMarkdownRendering()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -154,9 +168,16 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         var flushObserver: NSObjectProtocol?
         var lastCommandID: UUID?
         var isUpdating = false
+        private var scrollObserver: NSObjectProtocol?
+        private var viewportSave: DispatchWorkItem?
+        private var viewportReady = false
         private var textPublication = 0
         private var selectionPublication = 0
-        deinit { if let flushObserver { NotificationCenter.default.removeObserver(flushObserver) } }
+        deinit {
+            viewportSave?.cancel()
+            if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+            if let flushObserver { NotificationCenter.default.removeObserver(flushObserver) }
+        }
         init(parent: TextlinkEditorRepresentable) { self.parent = parent }
 
         func textDidChange(_ notification: Notification) {
@@ -167,9 +188,11 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         }
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !isUpdating else { return }
+            host?.textView.refreshMarkdownRendering()
             publishSelection()
         }
         func flush() {
+            saveViewport()
             guard let native = host?.textView else { return }
             native.commitComposition()
             native.rebuildLineIndex()
@@ -196,6 +219,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             selectionPublication &+= 1
             let publication = selectionPublication
             guard let native = host?.textView else { return }
+            if viewportReady { scheduleViewportSave() }
             let range = native.selectedRange()
             let position = native.position(at: range.location)
             let selected = range.length == 0 ? nil : (position.line + 1)...(native.line(at: NSMaxRange(range)) + 1)
@@ -210,14 +234,67 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         }
         var sourceVisible = true
 
-        func focusAndPublish() {
+        func observeScrolling() {
+            guard let clip = host?.contentView else { return }
+            clip.postsBoundsChangedNotifications = true
+            scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+                object: clip, queue: .main) { [weak self] _ in
+                guard let self, !self.isUpdating, self.viewportReady else { return }
+                self.scheduleViewportSave()
+            }
+        }
+
+        private func scheduleViewportSave() {
+            viewportSave?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.saveViewport() }
+            viewportSave = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+        }
+
+        func stopObservingScrolling() {
+            viewportSave?.cancel()
+            if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+            scrollObserver = nil
+        }
+
+        func saveViewport() {
+            viewportSave?.cancel()
+            guard viewportReady, parent.isEditable, let url = documentURL,
+                  let snapshot = host?.textView.scrollCoordinator.snapshot() else { return }
+            parent.viewportStore.save(snapshot, for: url)
+        }
+
+        @discardableResult
+        func restoreViewport() -> Bool {
+            viewportReady = false
+            viewportSave?.cancel()
+            guard parent.isEditable, let url = documentURL, let native = host?.textView,
+                  let saved = parent.viewportStore.position(for: url) else { return false }
+            native.scrollCoordinator.reopen(saved)
+            return true
+        }
+
+        // Tool callbacks may write SwiftUI state. Never invoke them from updateNSView.
+        func scheduleCommand(_ command: EditorCommand) {
+            let id = documentID, url = documentURL, revision = contentRevision
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.documentID == id, self.documentURL == url,
+                      self.contentRevision == revision,
+                      self.parent.isDocumentActive?(id, url, revision) ?? true,
+                      let native = self.host?.textView else { return }
+                native.execute(command)
+            }
+        }
+
+        func focusAndPublish(scrollToSelection: Bool = true) {
             let id = documentID, revision = contentRevision
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.parent.isSourceVisible, self.documentID == id, self.contentRevision == revision,
                       self.parent.isDocumentActive?(id, self.documentURL, revision) ?? true,
                       let native = self.host?.textView else { return }
-                native.scrollRangeToVisible(native.selectedRange())
                 native.window?.makeFirstResponder(native)
+                if scrollToSelection && !self.restoreViewport() { native.scrollCoordinator.revealSelection() }
+                self.viewportReady = self.parent.isEditable
                 self.publishSelection()
             }
         }

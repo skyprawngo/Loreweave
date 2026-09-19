@@ -12,7 +12,7 @@ struct FileSystemItemRow: View {
     let depth: Int
     /// 선택 콜백 (항목, 수정자 키)
     let onSelect: (FileSystemItem, EventModifiers) -> Void
-    var onMoveItem: ((FileSystemItem, FileSystemItem) -> Void)?
+    var onMoveItem: ((FileSystemItem, FileSystemItem) -> Bool)?
     /// 캐시 갱신 콜백 (펼침/접기, 파일 생성/삭제/이름 변경 등 모든 변경 시)
     var onCacheUpdate: (() -> Void)?
     /// 삭제 후 콜백 (삭제된 항목 전달)
@@ -182,10 +182,8 @@ struct FileSystemItemRow: View {
                 return false
             }
 
-            if let sourceItem = findItemByURL?(sourceURL) {
-                onMoveItem?(sourceItem, item)
-            }
-            return true
+            guard let sourceItem = findItemByURL?(sourceURL) else { return false }
+            return onMoveItem?(sourceItem, item) ?? false
         } isTargeted: { targeted in
             if item.isDirectory {
                 isDropTargeted = targeted

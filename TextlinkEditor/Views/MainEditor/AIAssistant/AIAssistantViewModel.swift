@@ -9,6 +9,7 @@ struct AIDocumentSnapshot {
 final class AIAssistantViewModel {
     static let shared = AIAssistantViewModel()
     let chatGPTAccount = ChatGPTAccountService()
+    let collaboration = CollaborationCoordinator()
     var connectionState: AIConnectionState = .inactive
     var selectedCLIType: AICLIType?
     var installStatus: CLIInstallationStatus = .unknown
@@ -84,6 +85,11 @@ final class AIAssistantViewModel {
         self.history = history
         self.processManager = executor ?? CLIProcessManager()
         loadSavedState()
+        collaboration.runtime = { [weak self] in
+            guard let self, !self.isProcessing, case .connected(let provider) = self.connectionState,
+                  provider != .chatgpt || self.chatGPTAccount.account != nil else { return nil }
+            return (provider, self.requestOptions(for: provider), self.processManager)
+        }
     }
 
     func loadSavedState() {
@@ -113,6 +119,7 @@ final class AIAssistantViewModel {
         errorMessage = nil
         inlineErrorMessage = nil
         if let url, case .connected(let type) = connectionState { loadHistory(type, url: url) }
+        collaboration.setProject(url)
     }
 
     private func loadHistory(_ type: AICLIType, url: URL) {
@@ -121,11 +128,24 @@ final class AIAssistantViewModel {
             historyLoadFailed = false
             messages = snapshot?.session.messages ?? []
             taggedCardIds = snapshot?.metadata.taggedCardIds ?? []
-            cardSessionIds = snapshot?.metadata.cliType == type.rawValue ? snapshot?.sessionIds ?? [:] : [:]
+            // A session belongs to the provider of its last response, not the last
+            // provider selected for the project as a whole.
+            cardSessionIds = snapshot?.sessionIds ?? [:]
+            selectedCardId = messages.last(where: {
+                $0.role == .user && $0.category == .chat && ($0.provider ?? snapshot?.metadata.cliType) == type.rawValue
+            }).map { $0.conversationId ?? $0.id }
         } catch {
             historyLoadFailed = true
             errorMessage = L10n.get("ai.error.historyLoadFailed")
         }
+    }
+
+    func resumableSession(for conversationId: UUID, provider: AICLIType) -> String? {
+        guard let last = messages.last(where: {
+            ($0.conversationId ?? $0.id) == conversationId && $0.role == .assistant
+        }), last.category == .chat, last.outcome == nil || last.outcome == "completed",
+           last.provider == provider.rawValue else { return nil }
+        return cardSessionIds[conversationId]
     }
 
     func prepareDraftAction(_ instruction: String) {
@@ -213,7 +233,7 @@ final class AIAssistantViewModel {
         }
         let requestInput = inlineInput ?? inputText
         let attachDocument = inlineInput == nil && includeCurrentDocument
-        guard !isProcessing, !requestInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !isProcessing, !collaboration.isWorking, !requestInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               case .connected(let type) = connectionState else { return }
         if type == .chatgpt && chatGPTAccount.account == nil { connectionState = .ready(type); return }
         guard let projectURL = projectFolderURL else { reportPreparationError(L10n.get("ai.error.noProject")); return }
@@ -226,7 +246,8 @@ final class AIAssistantViewModel {
         else { errorMessage = nil }
         let id = UUID()
         let userId = UUID()
-        let conversationId = inlineRevision == nil ? (continueFromCardId ?? userId) : userId
+        let continuedConversation = continueFromCardId ?? (inlineInput == nil ? selectedCardId : nil)
+        let conversationId = inlineRevision == nil ? (continuedConversation ?? userId) : userId
         let assistantId = UUID()
         var requestPersisted = false
         defer { if !requestPersisted { removeRequestArtifacts(ids: [assistantId]) } }
@@ -236,18 +257,17 @@ final class AIAssistantViewModel {
             reportPreparationError(L10n.get("ai.model.retry"))
             return
         }
-        let options = requestOptions(for: type, category: category)
+        var options = requestOptions(for: type, category: category)
+        options.readsProjectFiles = inlineRevision == nil
         let originalInput = requestInput
-        // Subscription accounts use the app-visible history, including after migration or account changes.
-        let existingSession = type == .chatgpt ? nil : cardSessionIds[conversationId]
+        let existingSession = inlineRevision == nil ? resumableSession(for: conversationId, provider: type) : nil
         let prepared: PreparedAIRequest
         do {
             prepared = try AIRequestPreparer().prepare(requestInput: requestInput, type: type,
                 projectURL: projectURL, assistantId: assistantId, inlineRevision: inlineRevision,
                 attachDocument: attachDocument, messages: messages, taggedCardIds: taggedCardIds,
-                existingSession: existingSession, continueFromCardId: continueFromCardId)
+                existingSession: existingSession, continueFromCardId: continuedConversation)
         } catch { reportPreparationError(error.localizedDescription); return }
-        let workspaceBefore = prepared.workspaceBefore
         messages.append(AIMessage(id: userId, role: .user, content: originalInput, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort))
         messages.append(AIMessage(id: assistantId, role: .assistant, content: "", isStreaming: true, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort))
         guard persist() else { messages.removeLast(2); return }
@@ -260,11 +280,7 @@ final class AIAssistantViewModel {
         requestId = id
         requestTask = Task { [weak self] in
             guard let self else { return }
-            let executor = AIWorkspaceTrackingExecutor(base: processManager, requestID: assistantId,
-                project: projectURL, before: workspaceBefore) { [weak self] error in
-                    guard let self, self.projectFolderURL == projectURL else { return }
-                    self.errorMessage = error.localizedDescription
-                }
+            let executor = AIWorkspaceProposalExecutor(base: processManager, requestID: assistantId, project: projectURL)
             var receivedResponse: String?
             do {
                 let result = try await executor.sendPrompt(prepared.prompt, cliType: type, workingDirectory: projectURL,
@@ -276,7 +292,11 @@ final class AIAssistantViewModel {
                                                timestamp: old.timestamp, isStreaming: true, conversationId: conversationId, kind: old.kind, provider: old.provider, model: old.model, reasoningEffort: old.reasoningEffort)
                 }
                 guard requestId == id, projectFolderURL == projectURL, !Task.isCancelled else { return }
-                if let session = result.sessionId { cardSessionIds[conversationId] = session }
+                if let session = result.sessionId ?? existingSession {
+                    cardSessionIds[conversationId] = session
+                } else {
+                    cardSessionIds.removeValue(forKey: conversationId)
+                }
                 receivedResponse = result.response
                 if let inlineRevision {
                     let replacement = try InlineEditRequest.replacement(from: result.response)
@@ -288,6 +308,9 @@ final class AIAssistantViewModel {
                 }
             } catch {
                 guard requestId == id, projectFolderURL == projectURL else { return }
+                // A failed session may be missing or contain an incomplete turn.
+                // A user retry rebuilds context from saved completed messages.
+                cardSessionIds.removeValue(forKey: conversationId)
                 // Accepted inline requests report only in their own history entry.
                 // Never replace the unrelated sidebar conversation's error or draft.
                 if inlineRevision == nil { errorMessage = error.localizedDescription }
@@ -313,6 +336,7 @@ final class AIAssistantViewModel {
     }
 
     func cancelSend() {
+        collaboration.cancel()
         requestId = nil // invalidate callbacks before touching process/UI state
         requestTask?.cancel()
         processManager.cancel()

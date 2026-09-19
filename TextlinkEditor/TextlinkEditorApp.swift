@@ -21,6 +21,7 @@ struct TextlinkEditorApp: App {
 
     // Register file appearance relocation even while only the welcome/settings window is open.
     private let appearanceStore = EditorAppearanceStore.shared
+    private let viewportStore = EditorViewportStore.shared
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var projectManager = ProjectManager.shared

@@ -10,6 +10,8 @@ views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
+sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
 sources += [views / name for name in ['PreparedManuscript.swift', 'EditorToolBridge.swift', 'NativeManuscriptView.swift']]
 prefix = (root / 'tests/editor_binding_regression.py').read_text().split("harness = r'''", 1)[1].split('final class Box', 1)[0]
 harness = r'''
@@ -201,6 +203,27 @@ view.applyExternalText("inserted 😀\n" + externalBase)
 window.displayIfNeeded()
 let movedTop = view.lineRect(at: view.offset(line: 10, column: 0))!.minY + view.textContainerOrigin.y - host.contentView.bounds.minY
 expect(abs(movedTop) < 1, "insertion above viewport keeps original first visible text at top")
+// A toolbar presentation must not reveal the offscreen cursor before toggling Markdown.
+view.load((0..<300).map { "row \($0) **bold words** *italic words* " + String(repeating: "wrapped manuscript ", count: 8) }.joined(separator: "\n"))
+view.applyDisplayStyle(EditorDisplayStyle(fontName: "Menlo", fontSize: 14, lineHeightMultiple: 1.25, letterSpacing: 0))
+view.setSelectedRange(NSRange(location: 0, length: 0))
+view.scrollCoordinator.restore(.init(offset: view.offset(line: 100, column: 0), screenY: 0))
+window.displayIfNeeded()
+let toggleAnchor = view.scrollCoordinator.capture(.preserveViewport)!
+var formatted = false
+view.onToolPresentation = { _ in
+    formatted.toggle()
+    view.setMarkdownRendering(formatted)
+}
+for iteration in 0..<12 {
+    view.execute(EditorCommand(.tool("display.markdownPreview")))
+    window.displayIfNeeded()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    window.displayIfNeeded()
+    let y = view.lineRect(at: toggleAnchor.offset)!.minY + view.textContainerOrigin.y - host.contentView.bounds.minY
+    expect(abs(y - toggleAnchor.screenY) < 1, "Markdown toggle \(iteration) retains viewport through reflow")
+    expect(view.selectedRange().location == 0, "Markdown toggle leaves offscreen cursor unchanged")
+}
 // Reestablish the pending operation for the detach check below.
 events.removeAll()
 view.toolBridge.perform(custom) { true }

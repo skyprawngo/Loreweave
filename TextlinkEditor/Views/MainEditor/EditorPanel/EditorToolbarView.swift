@@ -19,7 +19,7 @@ struct EditorToolbarView: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
-                formatButtons.disabled(isMarkdownPreview)
+                formatButtons
                 markdownPreviewButton
                 Divider().frame(height: 18)
                 FontPickerControl(fontName: $fontName, fontSize: $fontSize)
@@ -30,7 +30,7 @@ struct EditorToolbarView: View {
                 Spacer(minLength: 0)
             }
             HStack(spacing: 8) {
-                formatButtons.disabled(isMarkdownPreview)
+                formatButtons
                 markdownPreviewButton
                 Button { showingFormat.toggle() } label: {
                     Label(L10n.get("toolbar.format"), systemImage: "textformat").font(.system(size: iconSize))

@@ -343,6 +343,11 @@ struct MainEditorView: View {
                 DispatchQueue.main.async { NotificationCenter.default.post(notification) }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("collaborationCommentRequested"))) { _ in
+            assistant.setProject(projectManager.currentProject?.path)
+            assistant.collaboration.captureComment()
+            isAIPanelVisible = true
+        }
         .onReceive(appCommands.$newProjectRequested) { requested in
             if requested {
                 appCommands.newProjectRequested = false
@@ -368,7 +373,11 @@ struct MainEditorView: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         .onDisappear {
+            assistant.setProject(nil)
             fileSystemManager.closeProject()
+        }
+        .onChange(of: projectManager.currentProject?.path) { _, path in
+            assistant.setProject(path)
         }
         .appCommandHandler(
             appCommands: appCommands,
@@ -385,6 +394,7 @@ struct MainEditorView: View {
 
     private func initializeFileSystem() {
         guard let projectPath = projectManager.currentProject?.path else { return }
+        assistant.setProject(projectPath)
         fileSystemManager.initializeProject(at: projectPath)
     }
 

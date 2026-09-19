@@ -24,6 +24,14 @@ struct WritingLoreEntry: Codable, Identifiable, Equatable, Sendable {
     /// Empty means available from the beginning. IDs survive scene reordering.
     var revealedFromSceneID: UUID?
     var knownBy = ""
+    // Source-linked records do not duplicate authoritative document bodies.
+    var canonStatus: String? = nil
+    var sourceQuote: String? = nil
+    var sourceVersion: String? = nil
+    var sourceKey: String? = nil
+    var authorDecision: String? = nil
+    var appliedVersion: Int? = nil
+    var storyTime: String? = nil
 }
 
 struct WritingWorkspaceDocument: Codable, Equatable, Sendable {
@@ -72,9 +80,13 @@ struct WritingWorkspaceStore: Sendable {
     func resolve(_ path: String) throws -> URL {
         guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains(".."), !path.contains("\0") else { throw WritingWorkspaceError.unsafePath }
         let root = projectURL.standardizedFileURL.resolvingSymlinksInPath()
-        let candidate = projectURL.appendingPathComponent(path).standardizedFileURL
-        let resolved = candidate.resolvingSymlinksInPath()
-        guard resolved.path.hasPrefix(root.path + "/"), candidate.path == resolved.path || projectURL.standardizedFileURL.path != root.path else { throw WritingWorkspaceError.unsafePath }
+        let candidate = root.appendingPathComponent(path).standardizedFileURL
+        guard candidate.path.hasPrefix(root.path + "/") else { throw WritingWorkspaceError.unsafePath }
+        var cursor = candidate
+        while cursor.path != root.path {
+            guard (try? FileManager.default.destinationOfSymbolicLink(atPath: cursor.path)) == nil else { throw WritingWorkspaceError.unsafePath }
+            cursor.deleteLastPathComponent()
+        }
         return candidate
     }
 

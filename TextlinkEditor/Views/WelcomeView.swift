@@ -247,25 +247,15 @@ struct NewProjectSheet: View {
     let onCreate: (ProjectCreationOptions) -> Void
     let onCancel: () -> Void
 
-    @State private var isShowingCustomExtensionAlert = false
     @State private var isShowingFolderOptions = false
     @State private var creationOptions = ProjectCreationOptions()
-
-    /// 사용자가 커스텀 확장자를 사용하려는지 확인
-    private var hasCustomExtension: Bool {
-        projectName.contains(".")
-    }
 
     /// 최종 폴더명 (미리보기용)
     private var finalFolderName: String {
         let trimmedName = projectName.trimmingCharacters(in: .whitespaces)
         if trimmedName.isEmpty { return "" }
 
-        if hasCustomExtension {
-            return trimmedName
-        } else {
-            return "\(trimmedName).\(ProjectManager.projectExtension)"
-        }
+        return trimmedName
     }
 
     var body: some View {
@@ -293,10 +283,6 @@ struct NewProjectSheet: View {
                         TextField(L10n.get("welcome.projectNamePlaceholder"), text: $projectName)
                             .textFieldStyle(.roundedBorder)
                             .accessibilityLabel(L10n.get("welcome.projectName"))
-                        if !hasCustomExtension {
-                            Text(".\(ProjectManager.projectExtension)")
-                                .foregroundStyle(.secondary)
-                        }
                     }
                 }
 
@@ -328,7 +314,13 @@ struct NewProjectSheet: View {
                 .padding(.top, 8)
                 .padding(.bottom, 4)
             } label: {
-                Text(L10n.get(isShowingFolderOptions ? "welcome.lessOptions" : "welcome.moreOptions"))
+                Button {
+                    isShowingFolderOptions.toggle()
+                } label: {
+                    Text(L10n.get(isShowingFolderOptions ? "welcome.lessOptions" : "welcome.moreOptions"))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             .animation(.easeInOut(duration: 0.2), value: isShowingFolderOptions)
 
@@ -353,17 +345,6 @@ struct NewProjectSheet: View {
         .frame(width: 480)
         .fixedSize(horizontal: false, vertical: true)
         .presentationSizing(.fitted)
-        .alert(
-            L10n.get("welcome.customExtensionWarningTitle"),
-            isPresented: $isShowingCustomExtensionAlert
-        ) {
-            Button(L10n.common.cancel, role: .cancel) {}
-            Button(L10n.get("welcome.proceedAnyway"), role: .destructive) {
-                onCreate(creationOptions)
-            }
-        } message: {
-            Text(L10n.get("welcome.customExtensionWarningMessage"))
-        }
     }
 
     private var isValid: Bool {
@@ -371,11 +352,7 @@ struct NewProjectSheet: View {
     }
 
     private func handleCreate() {
-        if hasCustomExtension {
-            isShowingCustomExtensionAlert = true
-        } else {
-            onCreate(creationOptions)
-        }
+        onCreate(creationOptions)
     }
 
     private func selectDirectory() {

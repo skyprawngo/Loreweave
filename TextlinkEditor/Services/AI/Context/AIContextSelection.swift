@@ -85,8 +85,16 @@ final class AIContextSelection {
         let workspace = try store.load()
         let selectedScene = scene(projectURL: projectURL)
         let sceneID = selectedScene > 0 && selectedScene <= workspace.scenes.count ? workspace.scenes[selectedScene - 1].id : nil
-        let lore = store.references(workspace, at: sceneID).map {
-            AIContextItem(kind: .lore, source: $0.name, reason: L10n.get("ai.context.reason.workspace"), snapshot: $0.body + ($0.knownBy.isEmpty ? "" : "\n" + L10n.get("ai.context.knownBy") + $0.knownBy))
+        let lore = store.references(workspace, at: sceneID).compactMap { entry -> AIContextItem? in
+            if let status = entry.canonStatus {
+                guard status == "confirmed", let quote = entry.sourceQuote, let version = entry.sourceVersion else { return nil }
+                guard let source = try? store.resolve(entry.manuscriptPath),
+                      let text = try? String(contentsOf: source, encoding: .utf8) else { return nil }
+                guard CollaborationHash.text(text) == version, text.contains(quote) else { return nil }
+                return AIContextItem(kind: .lore, source: entry.manuscriptPath, reason: L10n.get("ai.context.reason.workspace"),
+                    snapshot: quote + "\nStory time: " + (entry.storyTime ?? "") + "\nKnown by: " + entry.knownBy)
+            }
+            return AIContextItem(kind: .lore, source: entry.name, reason: L10n.get("ai.context.reason.workspace"), snapshot: entry.body + (entry.knownBy.isEmpty ? "" : "\n" + L10n.get("ai.context.knownBy") + entry.knownBy))
         }
         for item in items(projectURL: projectURL) + lore {
             if let reveal = item.revealScene, reveal > scene(projectURL: projectURL) { continue }
@@ -163,10 +171,12 @@ final class AIContextSelection {
     private func validateComponents(_ url: URL, projectURL: URL) throws {
         let root = projectURL.standardizedFileURL
         let path = url.standardizedFileURL
-        guard path.path.hasPrefix(root.path + "/"), path.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/") else { throw AIContextError.unsafePath }
+        // Validate lexical containment plus every child component. Resolving a
+        // not-yet-created metadata path can produce a different /tmp alias.
+        guard path.path.hasPrefix(root.path + "/") else { throw AIContextError.unsafePath }
         var current = path
         while current.path != root.path {
-            if (try? current.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true { throw AIContextError.unsafePath }
+            if (try? FileManager.default.destinationOfSymbolicLink(atPath: current.path)) != nil { throw AIContextError.unsafePath }
             current.deleteLastPathComponent()
         }
     }

@@ -12,6 +12,7 @@ struct WorkspaceFileEvent {
     let id = UUID()
     let url: URL
     let change: Change
+    var originTaskID: UUID? = nil
 }
 
 /// Process-local, ordered on main. Subscribers must filter by their project/document ownership.

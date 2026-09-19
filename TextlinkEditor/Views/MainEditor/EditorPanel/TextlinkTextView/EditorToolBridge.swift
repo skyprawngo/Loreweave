@@ -43,13 +43,15 @@ final class EditorToolBridge {
             return
         }
         if tool.effects.contains(.text) || tool.effects.contains(.selection) { editor.commitComposition() }
-        let anchor = tool.category == .presentation ? editor.captureCursorViewportAnchor() : nil
+        // Opening a tool UI is not a layout mutation and must never reveal the caret.
+        let anchor = tool.category == .presentation && tool.effects.contains(.layout)
+            ? editor.scrollCoordinator.capture(for: .appearanceChange) : nil
         let changed = operation()
         emit(id, tool, .applied, changed ? .applied : .unchanged)
         guard changed else { emit(id, tool, .ended, .unchanged); return }
         if tool.effects.contains(.layout) {
             pending.append((id, tool))
-            if let anchor { editor.restoreCursorViewportAnchor(anchor) }
+            if let anchor { editor.scrollCoordinator.restore(anchor) }
             editor.needsLayout = true
             editor.needsDisplay = true
         } else {

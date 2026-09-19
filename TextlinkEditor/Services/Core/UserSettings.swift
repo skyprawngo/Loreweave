@@ -333,6 +333,12 @@ final class UserSettings {
         lastOpenedProjectPath = nil
     }
 
+    func clearLastOpenedProject(ifMatching url: URL) {
+        guard let path = lastOpenedProjectPath,
+              URL(fileURLWithPath: path).standardizedFileURL.path == url.standardizedFileURL.path else { return }
+        clearLastOpenedProject()
+    }
+
     // MARK: - 최근 프로젝트
 
     /// 최대 최근 프로젝트 수

@@ -22,18 +22,16 @@ final class ProjectManager {
     private let maxRecentProjects = 10
 
     /// Open panel delegate (강한 참조 유지)
-    private var openPanelDelegate: WeaveProjPanelDelegate?
+    private var openPanelDelegate: ProjectFolderPanelDelegate?
 
-    /// 프로젝트 폴더 확장자 (.weaveproj)
-    static let projectExtension = "weaveproj"
     /// 프로젝트 데이터 숨김 폴더 확장자 (.weavedata)
     static let dataFolderExtension = "weavedata"
     /// 프로젝트 메타데이터 파일명
     private let projectMetadataFile = "project.json"
 
     /// 프로젝트 폴더에서 숨김 데이터 폴더 경로 생성
-    /// - Parameter projectFolderURL: 프로젝트 폴더 URL (예: abc.weaveproj)
-    /// - Returns: 숨김 데이터 폴더 URL (예: abc.weaveproj/.abc.weavedata)
+    /// - Parameter projectFolderURL: 프로젝트 폴더 URL
+    /// - Returns: 프로젝트 내부의 숨김 데이터 폴더 URL
     private func dataFolderURL(for projectFolderURL: URL) -> URL {
         let projectName = projectFolderURL.deletingPathExtension().lastPathComponent
         let dataFolderName = ".\(projectName).\(Self.dataFolderExtension)"
@@ -148,23 +146,17 @@ final class ProjectManager {
 
     // MARK: - Project Operations
 
-    /// 새 프로젝트 생성 (.weaveproj 폴더 구조)
+    /// 새 프로젝트 생성 (일반 폴더, 확장자 자동 추가 없음)
     /// - Parameters:
-    ///   - name: 프로젝트 이름 (커스텀 확장자 포함 가능)
+    ///   - name: 프로젝트 폴더 이름
     ///   - directoryURL: 저장할 디렉토리
     ///   - options: 포함할 기본 폴더 (기본값은 전체 포함)
     /// - Returns: 생성된 프로젝트
     func createProject(name: String, at directoryURL: URL, options: ProjectCreationOptions = .init()) -> Project? {
         do { try DocumentFileStore.validateName(name) }
         catch { presentError(error); return nil }
-        // 이름에 .이 포함되어 있으면 커스텀 확장자로 간주
-        let hasCustomExtension = name.contains(".")
-        let folderName = hasCustomExtension ? name : "\(name).\(Self.projectExtension)"
-        let projectFolderURL = directoryURL.appendingPathComponent(folderName)
-
-        // 프로젝트 이름은 확장자 제외한 부분
-        let projectName = hasCustomExtension ? (name as NSString).deletingPathExtension : name
-        let project = Project(name: projectName, path: projectFolderURL)
+        let projectFolderURL = directoryURL.appendingPathComponent(name, isDirectory: true)
+        let project = Project(name: name, path: projectFolderURL)
 
         // 숨김 데이터 폴더 및 메타데이터 파일 경로
         let dataFolder = dataFolderURL(for: projectFolderURL)
@@ -207,7 +199,7 @@ final class ProjectManager {
         }
     }
 
-    /// .weaveproj 폴더에서 프로젝트 열기
+    /// 일반 폴더에서 프로젝트 열기
     func openProjectFromFile(at url: URL) -> Project? {
         if currentProject?.path == url { return currentProject }
         let access = restoreAccess(to: url)
@@ -234,10 +226,30 @@ final class ProjectManager {
             EditorTabManager.shared.restoreSession(from: url)
             return project
         } catch {
+            removeMissingRecentProject(at: url)
             if access { stopAccessing(url) }
             presentError(error)
             return nil
         }
+    }
+
+    /// Only a confirmed missing directory invalidates a recent path. Metadata or
+    /// permission failures must not discard a project that still exists.
+    private func removeMissingRecentProject(at url: URL) {
+        do {
+            _ = try FileManager.default.attributesOfItem(atPath: url.path)
+            return
+        } catch {
+            let failure = error as NSError
+            guard failure.domain == NSCocoaErrorDomain,
+                  failure.code == NSFileNoSuchFileError || failure.code == NSFileReadNoSuchFileError else { return }
+        }
+        let path = url.standardizedFileURL.path
+        let removed = recentProjects.compactMap(\.path).filter { $0.standardizedFileURL.path == path }
+        recentProjects.removeAll { $0.path?.standardizedFileURL.path == path }
+        saveRecentProjects()
+        removeBookmarks(for: Array(Set(removed.map(\.path) + [url.path])))
+        UserSettings.shared.clearLastOpenedProject(ifMatching: url)
     }
 
     @discardableResult
@@ -315,9 +327,9 @@ final class ProjectManager {
         panel.message = L10n.get("welcome.selectProjectFolder")
         panel.directoryURL = defaultSaveDirectory
 
-        // .weaveproj 확장자 폴더만 선택 가능하도록 delegate 설정
+        // 프로젝트 메타데이터로 확인하므로 폴더 확장자는 제한하지 않는다.
         // delegate를 인스턴스 프로퍼티에 저장하여 runModal() 중 메모리 해제 방지
-        openPanelDelegate = WeaveProjPanelDelegate()
+        openPanelDelegate = ProjectFolderPanelDelegate()
         panel.delegate = openPanelDelegate
 
         let result = panel.runModal()
@@ -328,12 +340,18 @@ final class ProjectManager {
         }
         return nil
     }
+
+    func isProjectFolder(_ url: URL) -> Bool {
+        guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+              let data = try? Data(contentsOf: metadataURL(for: url)) else { return false }
+        return (try? JSONDecoder().decode(Project.self, from: data)) != nil
+    }
 }
 
 // MARK: - Open Panel Delegate
 
-/// .weaveproj 폴더만 선택 가능하도록 필터링
-final class WeaveProjPanelDelegate: NSObject, NSOpenSavePanelDelegate {
+/// 탐색은 모든 폴더를 허용하고 프로젝트 메타데이터로 선택을 검증한다.
+final class ProjectFolderPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
         // 디렉토리인 경우
         var isDirectory: ObjCBool = false
@@ -342,16 +360,14 @@ final class WeaveProjPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         }
 
         if isDirectory.boolValue {
-            // .weaveproj 폴더이거나, 일반 폴더(탐색용)인 경우 활성화
-            return url.pathExtension == ProjectManager.projectExtension || url.pathExtension.isEmpty
+            return true
         }
 
         return false
     }
 
     func panel(_ sender: Any, validate url: URL) throws {
-        // .weaveproj 확장자가 아니면 에러
-        guard url.pathExtension == ProjectManager.projectExtension else {
+        guard ProjectManager.shared.isProjectFolder(url) else {
             throw NSError(
                 domain: "ProjectManager",
                 code: 1,

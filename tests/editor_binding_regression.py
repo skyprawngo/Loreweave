@@ -15,6 +15,8 @@ views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
+sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
 sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', views / 'NativeManuscriptView.swift']
 representable = (views / 'TextlinkEditorRepresentable.swift').read_text().split('// MARK: - Preview')[0]
 representable = representable.replace('struct TextlinkEditorRepresentable: NSViewRepresentable {', 'struct TextlinkEditorRepresentable {\n    struct Context { let coordinator: Coordinator }')
@@ -50,6 +52,10 @@ final class Box<T> { var value: T; init(_ value: T) { self.value = value } }
 func binding<T>(_ box: Box<T>) -> Binding<T> { Binding(get: { box.value }, set: { box.value = $0 }) }
 func expect(_ condition: @autoclosure () -> Bool, _ name: String) { precondition(condition(), name); print("PASS \(name)") }
 func drain() { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+let viewportSuite = "viewport-test-" + UUID().uuidString
+let viewportDefaults = UserDefaults(suiteName: viewportSuite)!
+let viewportStore = EditorViewportStore(defaults: viewportDefaults)
+defer { viewportDefaults.removePersistentDomain(forName: viewportSuite) }
 let content = Box("same")
 let cursorLine = Box(1)
 let cursorColumn = Box(0)
@@ -68,7 +74,7 @@ func parent(_ id: UUID, _ url: URL, editable: Bool = true, position: (line: Int,
         onContentWillChange: { url, value, _, _ in if let url { cache[url] = value } },
         documentID: id, documentURL: url,
         contentRevision: revision.value,
-        isDocumentActive: { id, url, expectedRevision in active.value.0 == id && active.value.1 == url && revision.value == expectedRevision })
+        isDocumentActive: { id, url, expectedRevision in active.value.0 == id && active.value.1 == url && revision.value == expectedRevision }, viewportStore: viewportStore)
 }
 var p = parent(a, urlA)
 let coordinator = p.makeCoordinator()
@@ -139,7 +145,7 @@ invalid = TextlinkEditorRepresentable(text: binding(content), cursorLine: bindin
     isEditable: false, initialCursorPosition: nil,
     onContentWillChange: { url, value, _, _ in if let url { cache[url] = value } },
     documentID: b, documentURL: urlB, contentRevision: revision.value,
-    isDocumentActive: { id, url, expectedRevision in active.value.0 == id && active.value.1 == url && revision.value == expectedRevision })
+    isDocumentActive: { id, url, expectedRevision in active.value.0 == id && active.value.1 == url && revision.value == expectedRevision }, viewportStore: viewportStore)
 invalid.updateNSView(view, context: context)
 cache[urlB] = "preserved read baseline"
 NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil)
@@ -207,6 +213,135 @@ counting.insertText("native ", replacementRange: NSRange(location: 0, length: 0)
 drain()
 parent(b, urlB).updateNSView(view, context: context)
 expect(counting.string == content.value && counting.undoManager!.canUndo, "native publication retains text and undo with snapshot guard")
+var presentationCount = 0
+var updatingView = false
+var toggle = parent(b, urlB)
+toggle.onToolPresentation = { _ in
+    expect(!updatingView, "presentation callback runs outside view update")
+    presentationCount += 1
+}
+toggle.editCommand = EditorCommand(.tool("display.markdownPreview"))
+updatingView = true
+toggle.updateNSView(view, context: context)
+toggle.updateNSView(view, context: context)
+updatingView = false
+expect(presentationCount == 0, "view update defers state-changing tool callback")
+drain()
+expect(presentationCount == 1, "repeated view updates execute the command only once")
+toggle.editCommand = EditorCommand(.tool("display.markdownPreview"))
+toggle.updateNSView(view, context: context)
+active.value = (a, urlA)
+drain()
+expect(presentationCount == 1, "queued tool cannot run after active document changes")
+let live = NativeManuscriptTextView()
+let rawMarkdown = "**bold**\n*italic*\n~~strike~~\n<u>under</u>\nplain"
+live.load(rawMarkdown)
+live.applyDisplayStyle(EditorDisplayStyle(fontName: "Menlo", fontSize: 14, lineHeightMultiple: 1.25, letterSpacing: 0))
+live.setSelectedRange(NSRange(location: (rawMarkdown as NSString).length, length: 0))
+live.setMarkdownRendering(true)
+expect(live.isEditable && live.string == rawMarkdown && live.lineStarts.count == 5, "formatted mode keeps editable source and line numbers")
+let boldFont = live.textStorage!.attribute(.font, at: 2, effectiveRange: nil) as! NSFont
+expect(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "formatted editor applies bold")
+let spacing = live.textStorage!.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as! NSParagraphStyle
+expect(spacing.lineHeightMultiple == 1.25, "formatted mode uses the same editor line spacing")
+expect(!live.undoManager!.canUndo, "display toggle does not add undo entries")
+live.insertText("NEW", replacementRange: NSRange(location: 2, length: 4))
+expect(live.string.hasPrefix("**NEW**"), "editing formatted content preserves Markdown delimiters")
+live.undoManager!.undo()
+expect(live.string == rawMarkdown, "formatted edit supports native undo")
+live.setMarkdownRendering(false)
+let markerFont = live.textStorage!.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
+expect(markerFont.pointSize == 14 && live.string == rawMarkdown, "source mode restores visible syntax without rewriting text")
+// Persist a viewport independently of the cursor and recreate the entire native view.
+_ = NSApplication.shared
+active.value = (b, urlB)
+content.value = (1...200).map { "row \($0) 한글" }.joined(separator: "\n")
+let savedViewport = EditorViewportPosition(firstVisibleLine: 80, firstLineText: "row 80 한글", offsetWithinLine: 0)
+viewportStore.save(savedViewport, for: urlB)
+let reloadedStore = EditorViewportStore(defaults: viewportDefaults)
+expect(reloadedStore.position(for: urlB) == savedViewport, "viewport line and text survive store recreation")
+var resume = parent(b, urlB, position: (0, 0))
+resume.viewportStore = reloadedStore
+let resumeCoordinator = resume.makeCoordinator()
+let resumeContext = TextlinkEditorRepresentable.Context(coordinator: resumeCoordinator)
+let resumeHost = resume.makeNSView(context: resumeContext)
+let resumeWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 400),
+    styleMask: [.titled], backing: .buffered, defer: false)
+resumeWindow.isReleasedWhenClosed = false
+resumeWindow.contentView = resumeHost
+resumeWindow.orderFront(nil)
+for _ in 0..<10 { drain() }
+resumeHost.layoutSubtreeIfNeeded()
+resumeCoordinator.saveViewport()
+let restoredViewport = reloadedStore.position(for: urlB)!
+expect(resumeHost.textView.visibleManuscriptLines().first?.row == 79, "actual viewport begins at saved line")
+expect(restoredViewport.firstVisibleLine == 80 && restoredViewport.firstLineText == "row 80 한글",
+    "native reopening restores first visible line instead of offscreen cursor")
+expect(resumeHost.textView.selectedRange().location == 0, "viewport restoration does not move the cursor")
+resumeHost.textView.restoreCursorViewportAnchor(.init(offset: resumeHost.textView.lineStarts[119], screenY: 0))
+drain()
+TextlinkEditorRepresentable.dismantleNSView(resumeHost, coordinator: resumeCoordinator)
+expect(reloadedStore.position(for: urlB)?.firstVisibleLine == 120, "closing saves latest scroll synchronously")
+resumeWindow.close()
+let moveEvents = WorkspaceFileEvents()
+let movedStore = EditorViewportStore(defaults: viewportDefaults, events: moveEvents)
+let movedURL = URL(fileURLWithPath: "/tmp/viewport-renamed.md")
+moveEvents.publish(WorkspaceFileEvent(url: movedURL, change: .moved(from: urlB)))
+expect(movedStore.position(for: movedURL)?.firstVisibleLine == 120 && movedStore.position(for: urlB) == nil,
+    "file rename carries its saved viewport")
+var rows = (1...200).map { "unique row \($0)" }
+rows[99] = "A"; rows[129] = "B"
+rows.insert(contentsOf: (1...20).map { "added \($0)" }, at: 29)
+let anchor = EditorViewportPosition(firstVisibleLine: 100, firstLineText: "A", offsetWithinLine: 0,
+    cursorLine: 130, cursorLineText: "B", cursorOffsetWithinLine: 1)
+func resolve(_ value: EditorViewportPosition, _ lines: [String]) -> EditorViewportResolver.Resolution {
+    EditorViewportResolver.resolve(value, lineCount: lines.count) { lines[$0] }
+}
+expect(resolve(anchor, rows).firstRow == 119, "insertion at row 30 moves A 100 to 120")
+expect(resolve(anchor, rows).cursorRow == 149, "cursor B moves 130 to 150")
+var missingFirst = rows; missingFirst[119] = "edited A"
+expect(resolve(anchor, missingFirst).firstRow == 119, "missing first text falls back to cursor distance")
+var duplicateFirst = rows; duplicateFirst[99] = "A"
+expect(resolve(anchor, duplicateFirst).firstRow == 119, "cursor disambiguates duplicated first-line text")
+var betweenAnchors = rows; betweenAnchors.insert(contentsOf: ["between", "between2"], at: 125)
+expect(resolve(anchor, betweenAnchors).firstRow == 119, "unique first text takes precedence over cursor displacement")
+var contextAnchor = anchor
+contextAnchor.cursorTextBefore = "B"; contextAnchor.cursorTextAfter = ""
+var changedCursor = missingFirst; changedCursor[149] = "prefix B suffix"
+expect(resolve(contextAnchor, changedCursor).firstRow == 119, "cursor context survives edits elsewhere on cursor line")
+expect(resolve(contextAnchor, changedCursor).cursorColumn == 8, "cursor context restores the character boundary")
+let legacyData = Data(#"{"firstVisibleLine":2,"firstLineText":"old","offsetWithinLine":0}"#.utf8)
+let legacy = try! JSONDecoder().decode(EditorViewportPosition.self, from: legacyData)
+expect(legacy.cursorLine == nil && resolve(legacy, ["new", "old"]).firstRow == 1, "legacy records remain readable")
+expect(resolve(anchor, ["short"]).firstRow == 0, "truncated document clamps safely")
+let corruptDefaults = UserDefaults(suiteName: viewportSuite + "-corrupt")!
+defer { corruptDefaults.removePersistentDomain(forName: viewportSuite + "-corrupt") }
+let corruptBytes = Data("invalid".utf8)
+corruptDefaults.set(corruptBytes, forKey: "editor.viewportPositions.v1")
+let corruptStore = EditorViewportStore(defaults: corruptDefaults)
+corruptStore.save(anchor, for: urlB)
+expect(corruptDefaults.data(forKey: "editor.viewportPositions.v1") == corruptBytes, "unreadable location records are preserved")
+
+// Reproduce the user's example with a newly created native editor and real layout.
+content.value = rows.joined(separator: "\n")
+reloadedStore.save(anchor, for: urlB)
+var shifted = parent(b, urlB, position: (0, 0))
+shifted.viewportStore = reloadedStore
+let shiftedCoordinator = shifted.makeCoordinator()
+let shiftedHost = shifted.makeNSView(context: .init(coordinator: shiftedCoordinator))
+let shiftedWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 400),
+    styleMask: [.titled], backing: .buffered, defer: false)
+shiftedWindow.isReleasedWhenClosed = false
+shiftedWindow.contentView = shiftedHost
+shiftedWindow.orderFront(nil)
+for _ in 0..<10 { drain() }
+expect(shiftedHost.textView.visibleManuscriptLines().first?.row == 119, "reopened native viewport starts at shifted A line 120")
+expect(shiftedHost.textView.position(at: shiftedHost.textView.selectedRange().location).line == 149,
+    "reopened native cursor follows B to line 150 without scrolling to it")
+shiftedCoordinator.saveViewport()
+expect(reloadedStore.position(for: urlB)?.cursorTextBefore == "B", "cursor-adjacent text is persisted")
+TextlinkEditorRepresentable.dismantleNSView(shiftedHost, coordinator: shiftedCoordinator)
+shiftedWindow.close()
 print("EDITOR BINDING REGRESSION COMPLETED")
 '''
 with tempfile.TemporaryDirectory(prefix='lore-binding-tests-') as directory:

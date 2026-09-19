@@ -26,13 +26,18 @@ final class CLIProcessManager: AIRequestExecuting {
         switch cliType {
         case .claude:
             var args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                        "--safe-mode", "--tools", ""]
+                        "--safe-mode", "--tools", options.readsProjectFiles ? "Read,Glob,Grep" : ""]
+            if options.readsProjectFiles {
+                args += ["--permission-mode", "dontAsk", "--allowedTools", "Read(./**),Glob,Grep"]
+            }
             args += options.arguments(for: cliType)
             if let sessionId { args += ["--resume", sessionId] }
             arguments = args
         case .chatgpt:
             try LoreCodexEnvironment.prepare()
-            var args = LoreCodexEnvironment.arguments + ["--ask-for-approval", "never", "exec", "--json", "--sandbox", allowsWorkspaceEdits ? "workspace-write" : "read-only",
+            // exec owns its config overrides. Top-level -c values are not
+            // reliably propagated into exec's auth store by supported runtimes.
+            var args = ["--ask-for-approval", "never", "exec"] + LoreCodexEnvironment.arguments + ["--json", "--sandbox", allowsWorkspaceEdits ? "workspace-write" : "read-only",
                         "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"]
             args += options.arguments(for: cliType)
             if let workingDirectory { args += ["--cd", workingDirectory.path] }

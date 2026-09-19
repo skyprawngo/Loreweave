@@ -128,7 +128,17 @@ struct WritingWorkspaceView: View {
                             ForEach(document.scenes) { Text($0.title).tag(Optional($0.id)) }
                         }
                         Text(L10n.get("writing.ui.41")).font(.headline)
-                        TextEditor(text: $document.lore[index].body).frame(minHeight: 140)
+                        if let quote = document.lore[index].sourceQuote {
+                            Text(quote).textSelection(.enabled)
+                            Text(L10n.get("collaboration.canon." + (document.lore[index].canonStatus ?? "proposed"))).font(.caption).foregroundStyle(.secondary)
+                            Button(L10n.get("collaboration.openSource")) {
+                                if let url = try? store.resolve(document.lore[index].manuscriptPath) {
+                                    EditorTabManager.shared.openFile(FileSystemItem(url: url, isDirectory: false))
+                                }
+                            }
+                        } else {
+                            TextEditor(text: $document.lore[index].body).frame(minHeight: 140)
+                        }
                         Toggle(L10n.get("writing.ui.42"), isOn: $document.lore[index].includeInAI)
                         Text(L10n.get("writing.ui.43")).font(.caption).foregroundStyle(.secondary)
                     }.formStyle(.grouped)
@@ -177,7 +187,10 @@ struct WritingWorkspaceView: View {
         catch { self.error = error.localizedDescription }
     }
     @discardableResult private func save() -> Bool {
-        do { try store.save(document); savedDocument = document; return true }
+        do {
+            guard try store.load() == savedDocument else { throw CollaborationFailure.conflict }
+            try store.save(document); savedDocument = document; return true
+        }
         catch { self.error = error.localizedDescription; return false }
     }
     private func confirmRemoval() {
